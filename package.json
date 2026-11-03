@@ -1,0 +1,39 @@
+{
+  "name": "dsh-api-relay-bridge",
+  "version": "2.1.0",
+  "description": "在 DSH 与 API 中转站之间架一层本地代理：把请求顶层的 system 提示折叠进首条 user 消息后置空，让上游真正收到系统提示；左侧栏提供状态面板与检测/启用/停止控制。",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis-plugin",
+    "llm",
+    "system-prompt",
+    "proxy"
+  ],
+  "dsh": {
+    "id": "dsh-api-relay-bridge",
+    "name": "API 中转站桥",
+    "version": "2.1.0",
+    "permissions": "在 127.0.0.1 上监听本地 HTTP 代理并把请求转发到配置的上游；包装进程内 globalThis.fetch 作为兜底改写；读写本地配置文件与审计日志",
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "license": "MIT"
+}

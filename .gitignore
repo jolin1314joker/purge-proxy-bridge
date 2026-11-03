@@ -1,0 +1,11 @@
+# 运行期与本地状态（插件会自动创建）
+node_modules/
+api-relay-bridge/
+*.jsonl
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
