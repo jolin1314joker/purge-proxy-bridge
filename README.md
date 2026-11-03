@@ -1,4 +1,4 @@
-# dsh-api-relay-bridge · API 中转站桥
+# purge-proxy-bridge · API 中转站桥
 
 在 **DSH（DeepSeek Harness）** 与 **API 中转站**之间架一层本地 HTTP 代理：把请求顶层的 `system` 折叠进第一条 `user` 消息，再把 `system` 置空，让上游真正"看见"系统提示。左侧栏附带一个「中转站桥」面板，提供 **检测 / 启用 / 停止** 三个动作与实时转发统计。
 
