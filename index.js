@@ -7,6 +7,13 @@
  * 然后原样（流式）转发到上游。请求链路上因此多了一跳本机回环，模型侧却能看到
  * 完整提示。
  *
+ * 多上游：DSH 的 baseURL 是 provider 级别的，一个地址就只能有一个上游。本插件
+ * 为每个 provider 记录它原本的上游地址，并在覆盖时额外写入一个内部路由头
+ * `x-relay-route: <provider>`；代理按这个头（其次按请求体里的 model，再其次按
+ * 路径前缀 `/<provider>/...`）选择真正的上游，于是「A 站的 DeepSeek-V4.1-Flash
+ * 走 A 站的上游、B 站的 gpt-6-astra 走 B 站的上游」可以同时成立，且所有
+ * provider 的 baseURL 都是同一个 `http://127.0.0.1:8790`。
+ *
  * 另外保留一个进程内 fetch 兜底改写：当某条 provider 仍然直连上游（例如没改
  * baseURL）时，兜底改写让同一份提示照样生效。
  */
@@ -20,11 +27,11 @@ import path from "node:path";
 /** 插件标识（cordis name）。 */
 const PLUGIN = "api-relay-bridge";
 /** 插件版本。 */
-const VERSION = "2.1.0";
+const VERSION = "2.2.0";
 /** 进程级安装状态的 Symbol 键，HMR 重载后仍能找到同一份状态。 */
 const STATE_KEY = Symbol.for("dsh.api-relay-bridge.state");
 /** 折叠后 system 文本与用户内容之间的分隔符。 */
-const SEPARATOR = "\n\n";
+const SEPARATOR = "\\n\\n";
 /** 面板保留的最近改写记录条数。 */
 const RECENT_LIMIT = 30;
 /** 面板请求体上限。 */
@@ -35,10 +42,16 @@ const MAX_FORWARD_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PORT = 8790;
 /** 默认上游。 */
 const DEFAULT_UPSTREAM = "";
+/** 代理只监听回环地址。 */
+const LISTEN_HOST = "127.0.0.1";
+/** 内部路由头：覆盖时写进 provider 的 headers，代理据此确定上游。 */
+const ROUTE_HEADER = "x-relay-route";
 /** 哨兵 URL：只被 fetch 兜底识别，用于确认它还挂在 fetch 链上。 */
 const PROBE_URL = "http://api-relay-bridge.internal/__probe__";
 /** 链路探测结果的缓存时长（毫秒）。 */
 const PROBE_TTL_MS = 30_000;
+/** DSH 配置快照的缓存时长（毫秒），避免面板轮询反复读 profile。 */
+const DSH_TTL_MS = 1500;
 /** 代理自带的内部路由。 */
 const PROXY_STATUS_PATH = "/__proxy/status";
 const PROXY_SELFTEST_PATH = "/__proxy/selftest";
@@ -47,6 +60,7 @@ const ROUTE_STATUS = "/relay-bridge/status";
 const ROUTE_PROXY = "/relay-bridge/proxy";
 const ROUTE_CONFIG = "/relay-bridge/config";
 const ROUTE_RESET = "/relay-bridge/reset";
+const ROUTE_MODELS = "/relay-bridge/models";
 
 const MODES = new Set(["move", "copy"]);
 
@@ -64,6 +78,11 @@ function resolveDshHome() {
 /** 状态目录（配置与审计）。 */
 function stateDir() {
 	return path.join(resolveDshHome(), "api-relay-bridge");
+}
+
+/** 错误对象转字符串。 */
+function messageOf(error) {
+	return String(error && error.message ? error.message : error);
 }
 
 /**
@@ -105,9 +124,9 @@ function normalizePort(value) {
 }
 
 /**
- * 规范化上游地址。
+ * 规范化上游地址：保留路径前缀（`https://host/v1` 这类网关很常见），去掉结尾斜杠。
  * @param {unknown} value - 配置值。
- * @returns {string} 形如 https://host 的上游 origin。
+ * @returns {string} 形如 https://host[/path] 的上游地址，无法识别时为空串。
  */
 function normalizeUpstream(value) {
 	const raw = typeof value === "string" ? value.trim() : "";
@@ -115,9 +134,35 @@ function normalizeUpstream(value) {
 	try {
 		const url = new URL(raw);
 		if (url.protocol !== "http:" && url.protocol !== "https:") return DEFAULT_UPSTREAM;
-		return `${url.protocol}//${url.host}`;
+		const prefix = url.pathname.replace(/\/+$/, "");
+		return `${url.protocol}//${url.host}${prefix}`;
 	} catch {
 		return DEFAULT_UPSTREAM;
+	}
+}
+
+/** 本插件的监听地址。 */
+function listenAddress(runtime) {
+	return `http://${LISTEN_HOST}:${runtime.port}`;
+}
+
+/**
+ * 判断一个 baseURL 是否已经指向本插件的监听地址（允许带 provider 路径前缀）。
+ * @param {unknown} value - provider 的 baseURL。
+ * @param {number} port - 监听端口。
+ * @returns {boolean} 是否指向本代理。
+ */
+function isListenUrl(value, port) {
+	if (typeof value !== "string" || value.length === 0) return false;
+	try {
+		const url = new URL(value);
+		if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+		const host = url.hostname.toLowerCase();
+		if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1" && host !== "[::1]") return false;
+		const actual = url.port.length > 0 ? Number.parseInt(url.port, 10) : url.protocol === "https:" ? 443 : 80;
+		return actual === port;
+	} catch {
+		return false;
 	}
 }
 
@@ -146,6 +191,11 @@ function normalizeConfig(raw) {
 /** 运行期覆盖文件路径。 */
 function configFile() {
 	return path.join(stateDir(), "config.json");
+}
+
+/** 模型 ↔ 上游映射文件路径。 */
+function mappingFile() {
+	return path.join(stateDir(), "routing.json");
 }
 
 /** 读取面板保存过的覆盖项。 */
@@ -182,6 +232,70 @@ function saveOverrides(runtime) {
 		verbose: runtime.verbose,
 	};
 	fs.writeFileSync(configFile(), `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+}
+
+/* ------------------------------------------------------------------ */
+/* 模型 ↔ 上游映射                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 规范化映射表。
+ * @param {unknown} raw - 磁盘内容。
+ * @returns {{version: number, updatedAt: string | null, providers: Record<string, object>}} 映射表。
+ */
+function normalizeMapping(raw) {
+	const out = { version: 1, updatedAt: null, providers: {} };
+	if (!raw || typeof raw !== "object") return out;
+	if (typeof raw.updatedAt === "string") out.updatedAt = raw.updatedAt;
+	const providers = raw.providers && typeof raw.providers === "object" ? raw.providers : {};
+	for (const [pid, value] of Object.entries(providers)) {
+		if (!pid || !value || typeof value !== "object") continue;
+		const entry = {
+			id: pid,
+			displayName: typeof value.displayName === "string" && value.displayName.length > 0 ? value.displayName : pid,
+			api: typeof value.api === "string" ? value.api : "",
+			original: normalizeUpstream(value.original),
+			upstream: normalizeUpstream(value.upstream),
+			covered: value.covered === true,
+			models: {},
+		};
+		const models = value.models && typeof value.models === "object" ? value.models : {};
+		for (const [mid, row] of Object.entries(models)) {
+			if (!mid) continue;
+			const source = row && typeof row === "object" && row.source === "manual" ? "manual" : "original";
+			const upstream = row && typeof row === "object" ? normalizeUpstream(row.upstream) : "";
+			const original = row && typeof row === "object" ? normalizeUpstream(row.original) : "";
+			entry.models[mid] = {
+				id: mid,
+				upstream,
+				original,
+				source,
+				updatedAt: row && typeof row === "object" && typeof row.updatedAt === "string" ? row.updatedAt : null,
+			};
+		}
+		out.providers[pid] = entry;
+	}
+	return out;
+}
+
+/** 读取映射表（缺失时返回空表）。 */
+function loadMapping() {
+	try {
+		return normalizeMapping(JSON.parse(fs.readFileSync(mappingFile(), "utf8")));
+	} catch {
+		return normalizeMapping(undefined);
+	}
+}
+
+/** 把映射表写盘。 */
+function saveMapping(mapping) {
+	const dir = stateDir();
+	fs.mkdirSync(dir, { recursive: true });
+	const payload = normalizeMapping(mapping);
+	payload.updatedAt = new Date().toISOString();
+	mapping.updatedAt = payload.updatedAt;
+	fs.writeFileSync(mappingFile(), `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+	return payload;
 }
 
 /* ------------------------------------------------------------------ */
@@ -356,6 +470,20 @@ function foldOpenAI(body, mode) {
 }
 
 /**
+ * 改写已解析的请求体。
+ * @param {object} body - 已解析的请求体对象（不会被就地修改）。
+ * @param {"move"|"copy"} mode - 改写方式。
+ * @returns {object | undefined} 改写后的请求体，或 undefined 表示无需改写。
+ */
+function rewriteBodyObject(body, mode) {
+	if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+	const next = body.system !== undefined ? foldAnthropic(body, mode) : foldOpenAI(body, mode);
+	if (next === undefined) return undefined;
+	if (JSON.stringify(next) === JSON.stringify(body)) return undefined;
+	return next;
+}
+
+/**
  * 改写一次请求体：把 system 折叠进首条 user 消息。
  * @param {string} text - 原始 JSON 文本。
  * @param {"move"|"copy"} mode - 是否删除 system 字段。
@@ -368,10 +496,8 @@ export function rewriteRequestBody(text, mode) {
 	} catch {
 		return undefined;
 	}
-	if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
-	const next = body.system !== undefined ? foldAnthropic(body, mode) : foldOpenAI(body, mode);
+	const next = rewriteBodyObject(body, mode);
 	if (next === undefined) return undefined;
-	if (JSON.stringify(next) === JSON.stringify(body)) return undefined;
 	return JSON.stringify(next);
 }
 
@@ -398,6 +524,469 @@ async function bodyToText(body) {
 	if (body instanceof ArrayBuffer) return Buffer.from(body).toString("utf8");
 	if (typeof Request !== "undefined" && body instanceof ReadableStream) return undefined;
 	return undefined;
+}
+
+/* ------------------------------------------------------------------ */
+/* 上游解析                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 从请求路径推断 API 形态，用于在同名模型（不同 provider）之间消歧。
+ * @param {string} pathname - 代理收到的路径。
+ * @returns {string} API 形态，未知时为空串。
+ */
+function apiShapeOfPath(pathname) {
+	if (typeof pathname !== "string") return "";
+	if (/\/chat\/completions$/.test(pathname) || /\/completions$/.test(pathname)) return "openai-completions";
+	if (/\/responses$/.test(pathname)) return "openai-responses";
+	if (/\/messages$/.test(pathname)) return "anthropic-messages";
+	return "";
+}
+
+/**
+ * 把上游前缀和请求路径拼成一个完整 URL。
+ *
+ * 上游可以带路径（`https://gateway.example/anthropic` 这类前缀很常见），这时
+ * 请求路径要接在前缀后面而不是把前缀顶掉，所以不能直接用 `new URL(path, base)`。
+ * @param {string} upstream - 上游地址（可能带路径前缀）。
+ * @param {string} pathname - 代理收到的路径（已去掉 provider 前缀）。
+ * @param {string} [search] - 查询串（含 `?`）。
+ * @returns {URL} 完整目标地址。
+ */
+function joinUpstream(upstream, pathname, search = "") {
+	const base = new URL(upstream);
+	const prefix = base.pathname.replace(/\/+$/, "");
+	const suffix = pathname.length > 0 ? pathname : "/";
+	base.pathname = `${prefix}${suffix.startsWith("/") ? suffix : `/${suffix}`}`;
+	base.search = search;
+	return base;
+}
+
+/**
+ * 从映射表里挑出这次请求应该走的真实上游。
+ *
+ * 优先级：路由头（覆盖时写入的 provider id）→ 路径前缀 `/<provider>/...` →
+ * 请求体里的 model（同名时用 API 形态消歧）→ 面板里的默认上游。
+ * @param {object} state - 安装状态。
+ * @param {{provider?: string, model?: string, pathname?: string}} context - 请求线索。
+ * @returns {{upstream: string, provider: string, model: string, via: string}} 路由结果。
+ */
+function resolveRoute(state, context) {
+	const mapping = state.mapping.providers;
+	const model = typeof context.model === "string" ? context.model : "";
+	const pick = (pid) => {
+		const entry = mapping[pid];
+		if (!entry) return "";
+		if (model.length > 0 && entry.models[model] !== undefined) {
+			const row = entry.models[model];
+			if (row.upstream.length > 0) return row.upstream;
+			if (row.original.length > 0) return row.original;
+		}
+		return entry.upstream || entry.original || "";
+	};
+	const provider = typeof context.provider === "string" ? context.provider : "";
+	if (provider.length > 0) {
+		const upstream = pick(provider);
+		if (upstream.length > 0) return { upstream, provider, model, via: "provider" };
+	}
+	if (model.length > 0) {
+		const shape = apiShapeOfPath(context.pathname ?? "");
+		const candidates = Object.entries(mapping).filter(([, entry]) => entry.models[model] !== undefined);
+		const filtered = shape.length > 0 ? candidates.filter(([, entry]) => entry.api === shape) : [];
+		const pool = filtered.length > 0 ? filtered : candidates;
+		if (pool.length === 1) {
+			const [pid] = pool[0];
+			const upstream = pick(pid);
+			if (upstream.length > 0) return { upstream, provider: pid, model, via: "model" };
+		}
+	}
+	if (state.runtime.upstream.length > 0) return { upstream: state.runtime.upstream, provider, model, via: "default" };
+	return { upstream: "", provider, model, via: "none" };
+}
+
+/**
+ * 从 baseURL / 请求路径里取出 provider id：支持 `http://127.0.0.1:8790/<provider>` 这种写法。
+ * @param {object} state - 安装状态。
+ * @param {string} pathname - 代理收到的路径。
+ * @returns {{provider: string | undefined, pathname: string}} 拆分结果。
+ */
+function splitProviderPath(state, pathname) {
+	const match = /^\/([^/]+)(\/.*)?$/.exec(pathname);
+	if (match === null) return { provider: undefined, pathname };
+	let candidate = match[1];
+	try {
+		candidate = decodeURIComponent(candidate);
+	} catch {
+		/* 非法转义按原样处理 */
+	}
+	if (!Object.hasOwn(state.mapping.providers, candidate)) return { provider: undefined, pathname };
+	return { provider: candidate, pathname: match[2] && match[2].length > 0 ? match[2] : "/" };
+}
+
+/* ------------------------------------------------------------------ */
+/* DSH 模型设置读写                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 拆开 schemastery 的 volatile 包装（`{get: () => value}`）。
+ * @param {unknown} value - 可能被包装的值。
+ * @returns {unknown} 解开后的值。
+ */
+function unwrapVolatile(value) {
+	let node = value;
+	for (let depth = 0; depth < 4; depth += 1) {
+		if (!node || typeof node !== "object") return node;
+		const getter = Reflect.get(node, "get");
+		if (typeof getter !== "function") return node;
+		try {
+			node = getter.call(node);
+		} catch {
+			return node;
+		}
+	}
+	return node;
+}
+
+/**
+ * 从 live config / settings 表单里挑出 llm-pi-ai 的 providers 表。
+ * @param {unknown} value - 形如 `{providers: {...}}` 的配置。
+ * @returns {Record<string, object> | undefined} providers 表；不是 pi-ai 配置时返回 undefined。
+ */
+function providersOf(value) {
+	const node = unwrapVolatile(value);
+	if (!node || typeof node !== "object" || Array.isArray(node)) return undefined;
+	const providers = unwrapVolatile(Reflect.get(node, "providers"));
+	if (!providers || typeof providers !== "object" || Array.isArray(providers)) return undefined;
+	return providers;
+}
+
+/** loader entry id 是否指向 pi-ai 适配器。 */
+function isPiAiId(id) {
+	return typeof id === "string" && /llm-pi-ai$/.test(id);
+}
+
+/**
+ * 读取 DSH 当前的 provider 表（面板显示与路由兜底都用它）。
+ * @param {object} state - 安装状态。
+ * @param {boolean} [force] - 跳过缓存。
+ * @returns {Promise<{ok: boolean, ns: string, providers: Record<string, object>, source: string, error: string | null}>} 结果。
+ */
+async function readDshProviders(state, force = false) {
+	const now = Date.now();
+	if (!force && state.dshCache !== undefined && now - state.dshCache.at < DSH_TTL_MS) return state.dshCache.value;
+	const finish = (value) => {
+		state.dshCache = { at: Date.now(), value };
+		return value;
+	};
+	const fail = (error) => finish({ ok: false, ns: "", providers: {}, source: "none", error });
+	const editor = state.host?.configEditor;
+	if (editor && typeof editor.entries === "function") {
+		try {
+			const rows = [...editor.entries()];
+			const ordered = rows.filter((entry) => isPiAiId(entry?.options?.id)).concat(rows.filter((entry) => !isPiAiId(entry?.options?.id)));
+			for (const entry of ordered) {
+				const providers = providersOf(entry && entry.fiber ? entry.fiber.config : undefined);
+				if (providers === undefined) continue;
+				return finish({ ok: true, ns: String(entry.options?.id ?? ""), providers, source: "configEditor", error: null });
+			}
+		} catch (error) {
+			return fail(messageOf(error));
+		}
+	}
+	const settings = state.host?.settings;
+	if (settings && typeof settings.describe === "function") {
+		try {
+			const rows = await settings.describe({});
+			for (const row of Array.isArray(rows) ? rows : []) {
+				const providers = providersOf(row && row.value);
+				if (providers === undefined) continue;
+				return finish({ ok: true, ns: String(row.ns ?? ""), providers, source: "settings", error: null });
+			}
+		} catch (error) {
+			return fail(messageOf(error));
+		}
+	}
+	if (!editor) return fail("configEditor 服务不可用（非 profile 模式，或配置编辑器未启用）");
+	return finish({ ok: false, ns: "", providers: {}, source: "none", error: "未在 DSH 配置里找到 llm-pi-ai 的 providers" });
+}
+
+/**
+ * 把 providers 表写回 profile（走 configEditor 的验证 + 热重载通道）。
+ * @param {object} state - 安装状态。
+ * @param {object} entry - 承载 providers 的 loader entry。
+ * @param {(providers: Record<string, object>) => Record<string, object> | undefined} mutate - 在最新配置上做改动。
+ * @returns {Promise<{ok: boolean, error: string | null}>} 结果。
+ */
+async function writeDshProviders(state, entry, mutate) {
+	const editor = state.host?.configEditor;
+	if (!editor || typeof editor.edit !== "function") {
+		return { ok: false, error: "configEditor 服务不可用，无法改写 DSH 模型设置" };
+	}
+	if (entry === undefined) return { ok: false, error: "未在 DSH 配置里找到 llm-pi-ai 的 providers" };
+	let failure = null;
+	try {
+		await editor.edit(entry, (current) => {
+			const base = current && typeof current === "object" ? current : {};
+			const source = base.providers && typeof base.providers === "object" ? base : entry;
+			const providers = rawProvidersOf(source, providersOf(entry?.fiber?.config) ?? {});
+			const next = mutate(providers);
+			if (next === undefined) return base;
+			return { ...base, providers: next };
+		});
+	} catch (error) {
+		failure = messageOf(error);
+	}
+	state.dshCache = undefined;
+	return failure === null ? { ok: true, error: null } : { ok: false, error: failure };
+}
+
+/** 把 live providers 里的模型 id 列出来。 */
+function modelIdsOf(profile) {
+	const models = profile && Array.isArray(profile.models) ? profile.models : [];
+	const out = [];
+	for (const model of models) {
+		if (typeof model === "string" && model.length > 0) out.push({ id: model, name: model });
+		else if (model && typeof model === "object" && typeof model.id === "string" && model.id.length > 0) {
+			out.push({ id: model.id, name: typeof model.name === "string" && model.name.length > 0 ? model.name : model.id });
+		}
+	}
+	return out;
+}
+
+/** 深拷贝成纯对象：live 配置里的 providers 是 schemastery 冻结包装，直接写会抛只读错误。 */
+function deepPlain(value) {
+	if (Array.isArray(value)) return value.map((item) => deepPlain(item));
+	if (value !== null && typeof value === "object") {
+		const copy = {};
+		for (const [key, item] of Object.entries(value)) copy[key] = deepPlain(item);
+		return copy;
+	}
+	return value;
+}
+
+/** 取原始（未解析）的 providers 表，用于写回；拿不到时退回 live 表，两种情况都返回全新的纯对象副本。 */
+function rawProvidersOf(entry, providers) {
+	const raw = entry && entry.options && entry.options.config;
+	// entry.options.config 有时也带着 schemastery 的 volatile 包装，交给 providersOf 统一拆。
+	const source = providersOf(raw) ?? providers;
+	const copy = {};
+	for (const [pid, profile] of Object.entries(source ?? {})) {
+		if (profile === null || typeof profile !== "object") continue;
+		copy[pid] = deepPlain(profile);
+	}
+	return copy;
+}
+
+/** 找到承载 providers 的 loader entry（写入需要 entry，而不是 id）。 */
+function providerEntry(state) {
+	const editor = state.host?.configEditor;
+	if (!editor || typeof editor.entries !== "function") return undefined;
+	try {
+		for (const entry of editor.entries()) {
+			if (providersOf(entry && entry.fiber ? entry.fiber.config : undefined) !== undefined) return entry;
+		}
+	} catch {
+		/* 找不到就返回 undefined */
+	}
+	return undefined;
+}
+
+/**
+ * 覆盖：把每个 provider 的 baseURL 指到本插件，并写入内部路由头。
+ * @param {object} state - 安装状态。
+ * @param {string[] | undefined} ids - 只覆盖这些 provider；缺省为全部。
+ * @returns {Promise<{ok: boolean, covered: string[], error: string | null}>} 结果。
+ */
+async function coverProviders(state, ids) {
+	const live = await readDshProviders(state, true);
+	if (!live.ok) return { ok: false, covered: [], error: live.error };
+	const entry = providerEntry(state);
+	if (entry === undefined) return { ok: false, covered: [], error: "configEditor 服务不可用，无法改写 DSH 模型设置" };
+	const listen = listenAddress(state.runtime);
+	const wanted = Array.isArray(ids) && ids.length > 0 ? new Set(ids.filter((id) => typeof id === "string")) : undefined;
+	const mapping = state.mapping;
+	const covered = [];
+	const written = await writeDshProviders(state, entry, (raw) => {
+		for (const [pid, profile] of Object.entries(raw)) {
+			if (wanted !== undefined && !wanted.has(pid)) continue;
+			const current = profile && typeof profile === "object" ? { ...profile } : {};
+			const baseURL = typeof current.baseURL === "string" ? current.baseURL : "";
+			const original = isListenUrl(baseURL, state.runtime.port) ? "" : normalizeUpstream(baseURL);
+			const existing = mapping.providers[pid] ?? {
+				id: pid,
+				displayName: pid,
+				api: "",
+				original: "",
+				upstream: "",
+				covered: false,
+				models: {},
+			};
+			const keepOriginal = original.length > 0 ? original : existing.original;
+			const api = typeof current.api === "string" ? current.api : existing.api;
+			const displayName = typeof current.displayName === "string" && current.displayName.length > 0 ? current.displayName : pid;
+			const models = {};
+			for (const model of modelIdsOf(live.providers[pid] ?? current)) {
+				const row = existing.models[model.id];
+				models[model.id] = {
+					id: model.id,
+					upstream: row && row.upstream.length > 0 ? row.upstream : keepOriginal,
+					original: row && row.original.length > 0 ? row.original : keepOriginal,
+					source: row && row.source === "manual" ? "manual" : "original",
+					updatedAt: row ? row.updatedAt : null,
+				};
+			}
+			mapping.providers[pid] = {
+				id: pid,
+				displayName,
+				api,
+				original: keepOriginal,
+				upstream: existing.upstream || keepOriginal,
+				covered: true,
+				models,
+			};
+			current.baseURL = listen;
+			const headers = current.headers && typeof current.headers === "object" ? { ...current.headers } : {};
+			headers[ROUTE_HEADER] = pid;
+			current.headers = headers;
+			raw[pid] = current;
+			covered.push(pid);
+		}
+		return covered.length > 0 ? raw : undefined;
+	});
+	if (!written.ok) return { ok: false, covered: [], error: written.error };
+	if (covered.length === 0) return { ok: true, covered, error: null };
+	saveMapping(mapping);
+	state.logger.info(`api-relay-bridge: 已覆盖 ${covered.length} 个 provider 的 baseURL → ${listen}`);
+	return { ok: true, covered, error: null };
+}
+
+/**
+ * 还原：把 baseURL 写回覆盖前记录的上游地址，并移除内部路由头。
+ * @param {object} state - 安装状态。
+ * @param {string[] | undefined} ids - 只还原这些 provider；缺省为全部。
+ * @returns {Promise<{ok: boolean, restored: string[], skipped: string[], error: string | null}>} 结果。
+ */
+async function uncoverProviders(state, ids) {
+	const live = await readDshProviders(state, true);
+	if (!live.ok) return { ok: false, restored: [], skipped: [], error: live.error };
+	const entry = providerEntry(state);
+	if (entry === undefined) return { ok: false, restored: [], skipped: [], error: "configEditor 服务不可用，无法改写 DSH 模型设置" };
+	const wanted = Array.isArray(ids) && ids.length > 0 ? new Set(ids.filter((id) => typeof id === "string")) : undefined;
+	const restored = [];
+	const skipped = [];
+	const written = await writeDshProviders(state, entry, (raw) => {
+		for (const [pid, profile] of Object.entries(raw)) {
+			if (wanted !== undefined && !wanted.has(pid)) continue;
+			const current = profile && typeof profile === "object" ? { ...profile } : {};
+			const record = state.mapping.providers[pid];
+			const target = record ? record.original || record.upstream : normalizeUpstream(current.baseURL);
+			if (target.length === 0) {
+				skipped.push(pid);
+				continue;
+			}
+			current.baseURL = target;
+			if (current.headers && typeof current.headers === "object") {
+				const headers = { ...current.headers };
+				delete headers[ROUTE_HEADER];
+				if (Object.keys(headers).length === 0) delete current.headers;
+				else current.headers = headers;
+			}
+			if (record) record.covered = false;
+			raw[pid] = current;
+			restored.push(pid);
+		}
+		return restored.length > 0 ? raw : undefined;
+	});
+	if (!written.ok) return { ok: false, restored: [], skipped, error: written.error };
+	if (restored.length === 0) return { ok: true, restored, skipped, error: null };
+	saveMapping(state.mapping);
+	state.logger.info(`api-relay-bridge: 已还原 ${restored.length} 个 provider 的 baseURL`);
+	return { ok: true, restored, skipped, error: null };
+}
+
+/**
+ * 修改某个模型的上游地址（只动插件映射，DSH 侧 baseURL 已经指向本代理）。
+ * @param {object} state - 安装状态。
+ * @param {string} pid - provider id。
+ * @param {string} mid - 模型 id。
+ * @param {string} upstream - 新的上游 origin；空串表示恢复原始地址。
+ * @returns {{ok: boolean, error: string | null}} 结果。
+ */
+function setModelUpstream(state, pid, mid, upstream) {
+	if (typeof pid !== "string" || pid.length === 0) return { ok: false, error: "缺少 provider" };
+	if (typeof mid !== "string" || mid.length === 0) return { ok: false, error: "缺少模型 id" };
+	const normalized = normalizeUpstream(upstream);
+	if (typeof upstream === "string" && upstream.trim().length > 0 && normalized.length === 0) {
+		return { ok: false, error: "上游地址必须是 http(s) 的完整 URL" };
+	}
+	const provider = state.mapping.providers[pid] ?? { id: pid, displayName: pid, api: "", original: "", upstream: "", covered: false, models: {} };
+	const row = provider.models[mid] ?? { id: mid, upstream: "", original: provider.original, source: "original", updatedAt: null };
+	row.upstream = normalized.length > 0 ? normalized : row.original || provider.original;
+	row.source = typeof upstream === "string" && upstream.trim().length > 0 && normalized !== (row.original || provider.original) ? "manual" : "original";
+	row.updatedAt = new Date().toISOString();
+	provider.models[mid] = row;
+	state.mapping.providers[pid] = provider;
+	saveMapping(state.mapping);
+	return { ok: true, error: null };
+}
+
+/**
+ * 删除一个模型：同时清掉映射行和 DSH 模型设置里的模型。
+ * @param {object} state - 安装状态。
+ * @param {string} pid - provider id。
+ * @param {string} mid - 模型 id。
+ * @returns {Promise<{ok: boolean, removedProvider: boolean, error: string | null, warning: string | null}>} 结果。
+ */
+async function deleteModelRoute(state, pid, mid) {
+	if (typeof pid !== "string" || pid.length === 0) return { ok: false, removedProvider: false, error: "缺少 provider", warning: null };
+	if (typeof mid !== "string" || mid.length === 0) return { ok: false, removedProvider: false, error: "缺少模型 id", warning: null };
+	const live = await readDshProviders(state, true);
+	if (!live.ok) return { ok: false, removedProvider: false, error: live.error, warning: null };
+	const entry = providerEntry(state);
+	if (entry === undefined) return { ok: false, removedProvider: false, error: "configEditor 服务不可用，无法改写 DSH 模型设置", warning: null };
+	let removedProvider = false;
+	let missing = false;
+	const written = await writeDshProviders(state, entry, (raw) => {
+		const profile = raw[pid];
+		if (!profile || typeof profile !== "object") {
+			missing = true;
+			return undefined;
+		}
+		const models = Array.isArray(profile.models)
+			? profile.models.filter((model) => {
+					const id = typeof model === "string" ? model : model && typeof model === "object" ? model.id : undefined;
+					return id !== mid;
+				})
+			: [];
+		if (models.length === 0) {
+			delete raw[pid];
+			removedProvider = true;
+		} else {
+			raw[pid] = { ...profile, models };
+		}
+		return raw;
+	});
+	if (missing) return { ok: false, removedProvider: false, error: `provider "${pid}" 不存在`, warning: null };
+	if (!written.ok) return { ok: false, removedProvider: false, error: written.error, warning: null };
+	if (state.mapping.providers[pid] !== undefined) {
+		delete state.mapping.providers[pid].models[mid];
+		if (removedProvider) delete state.mapping.providers[pid];
+		saveMapping(state.mapping);
+	}
+	let warning = null;
+	try {
+		for (const item of state.host?.configEditor?.entries?.() ?? []) {
+			const config = item && item.options ? item.options.config : undefined;
+			if (!config || typeof config !== "object" || Array.isArray(config)) continue;
+			if (config.provider === pid && config.model === mid) {
+				warning = `默认模型仍指向 ${pid}/${mid}，请在 DSH 设置里换一个默认模型`;
+			}
+		}
+	} catch {
+		/* 默认模型检查失败不影响删除结果 */
+	}
+	state.logger.info(`api-relay-bridge: 已删除模型 ${pid}/${mid}${removedProvider ? "（provider 已无模型，整条移除）" : ""}`);
+	return { ok: true, removedProvider, error: null, warning };
 }
 
 /* ------------------------------------------------------------------ */
@@ -432,13 +1021,16 @@ function proxySnapshot(state) {
 	const proxy = state.proxy;
 	return {
 		listening: proxy.server !== null,
-		address: proxy.server !== null ? `127.0.0.1:${state.runtime.port}` : "",
+		address: proxy.server !== null ? `${LISTEN_HOST}:${state.runtime.port}` : "",
+		listen: listenAddress(state.runtime),
 		port: state.runtime.port,
 		upstream: state.runtime.upstream,
+		defaultUpstream: state.runtime.upstream,
 		mode: state.runtime.mode,
 		startedAt: proxy.startedAt,
-		stats: { ...proxy.stats },
+		stats: { ...proxy.stats, byProvider: { ...(proxy.stats.byProvider ?? {}) } },
 		lastError: proxy.lastError,
+		lastRoute: proxy.lastRoute ?? null,
 	};
 }
 
@@ -459,7 +1051,7 @@ async function handleSelfTest(state, req, res) {
 	try {
 		raw = await readAll(req, MAX_BODY_BYTES);
 	} catch (error) {
-		sendJson(res, 413, { ok: false, error: String(error && error.message ? error.message : error) });
+		sendJson(res, 413, { ok: false, error: messageOf(error) });
 		return;
 	}
 	let sample;
@@ -494,36 +1086,75 @@ async function handleSelfTest(state, req, res) {
 	});
 }
 
-/** 转发一次请求到上游（流式）。 */
+/** 转发一次请求到解析出来的上游（流式）。 */
 async function forward(state, req, res) {
 	const settings = state.runtime;
 	const proxy = state.proxy;
-	if (settings.upstream.length === 0) {
-		proxy.stats.errors += 1;
-		proxy.lastError = "未配置上游地址（upstream）";
-		sendJson(res, 503, { error: "upstream not configured" });
-		return;
-	}
 	let body;
 	try {
 		body = await readAll(req, MAX_FORWARD_BYTES);
 	} catch (error) {
 		proxy.stats.errors += 1;
-		proxy.lastError = String(error && error.message ? error.message : error);
+		proxy.lastError = messageOf(error);
 		sendJson(res, 413, { error: proxy.lastError });
 		return;
 	}
 
 	const method = String(req.method ?? "GET").toUpperCase();
+	const rawPath = req.url ?? "/";
+	let pathname = "/";
+	try {
+		pathname = new URL(rawPath, "http://127.0.0.1").pathname;
+	} catch {
+		pathname = "/";
+	}
+	const prefixed = splitProviderPath(state, pathname);
+	const headerRoute = req.headers[ROUTE_HEADER];
+	const providerHint =
+		prefixed.provider ?? (typeof headerRoute === "string" && headerRoute.length > 0 ? headerRoute : undefined);
+	const search = (() => {
+		try {
+			return new URL(rawPath, "http://127.0.0.1").search;
+		} catch {
+			return "";
+		}
+	})();
+
 	let payload = body;
 	let rewritten = false;
+	let modelId;
+	let systemChars = 0;
 	if (method === "POST" && body.length > 0) {
 		const text = body.toString("utf8");
-		const next = rewriteRequestBody(text, settings.mode);
-		if (next !== undefined) {
-			payload = Buffer.from(next, "utf8");
-			rewritten = true;
+		let parsed;
+		try {
+			parsed = JSON.parse(text);
+		} catch {
+			parsed = undefined;
 		}
+		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+			if (typeof parsed.model === "string") modelId = parsed.model;
+			systemChars = flattenSystem(parsed.system).text.length;
+			const next = rewriteBodyObject(parsed, settings.mode);
+			if (next !== undefined) {
+				payload = Buffer.from(JSON.stringify(next), "utf8");
+				rewritten = true;
+			}
+		}
+	}
+
+	const route = resolveRoute(state, { provider: providerHint, model: modelId, pathname: prefixed.pathname });
+	if (route.upstream.length === 0) {
+		proxy.stats.errors += 1;
+		proxy.lastError = modelId ? `模型 "${modelId}" 没有可用的上游地址` : "未配置上游地址";
+		sendJson(res, 503, {
+			error: "upstream not configured",
+			detail: proxy.lastError,
+			model: modelId ?? null,
+			provider: providerHint ?? null,
+			hint: "在「中转站桥」面板点「覆盖」，或给该模型填写上游地址",
+		});
+		return;
 	}
 
 	proxy.stats.requests += 1;
@@ -533,16 +1164,29 @@ async function forward(state, req, res) {
 		proxy.stats.lastAt = new Date().toISOString();
 		record(state, {
 			at: proxy.stats.lastAt,
-			host: new URL(settings.upstream).host,
-			systemChars: countSystemChars(body),
+			host: new URL(route.upstream).host,
+			provider: route.provider,
+			model: route.model,
+			systemChars,
 			mode: settings.mode,
 			via: "proxy",
 		});
 	}
+	if (route.provider.length > 0) {
+		const counts = proxy.stats.byProvider ?? (proxy.stats.byProvider = {});
+		counts[route.provider] = (counts[route.provider] ?? 0) + 1;
+	}
+	proxy.lastRoute = {
+		at: new Date().toISOString(),
+		provider: route.provider,
+		model: route.model,
+		upstream: route.upstream,
+		via: route.via,
+	};
 
 	let target;
 	try {
-		target = new URL(req.url ?? "/", settings.upstream);
+		target = joinUpstream(route.upstream, prefixed.pathname, search);
 	} catch {
 		sendJson(res, 400, { error: "invalid request url" });
 		return;
@@ -558,6 +1202,7 @@ async function forward(state, req, res) {
 	delete headers.connection;
 	delete headers["content-length"];
 	delete headers["accept-encoding"];
+	delete headers[ROUTE_HEADER];
 	headers["content-length"] = String(payload.length);
 
 	const lib = target.protocol === "https:" ? https : http;
@@ -578,14 +1223,14 @@ async function forward(state, req, res) {
 				res.writeHead(upstreamRes.statusCode ?? 502, outHeaders);
 			} catch (error) {
 				proxy.stats.errors += 1;
-				proxy.lastError = String(error && error.message ? error.message : error);
+				proxy.lastError = messageOf(error);
 				upstreamRes.destroy();
 				return;
 			}
 			upstreamRes.pipe(res);
 			upstreamRes.on("error", (error) => {
 				proxy.stats.errors += 1;
-				proxy.lastError = String(error && error.message ? error.message : error);
+				proxy.lastError = messageOf(error);
 				res.destroy();
 			});
 		}
@@ -600,7 +1245,7 @@ async function forward(state, req, res) {
 	});
 	upstreamReq.on("error", (error) => {
 		proxy.stats.errors += 1;
-		proxy.lastError = String(error && error.message ? error.message : error);
+		proxy.lastError = messageOf(error);
 		if (!res.headersSent) sendJson(res, 502, { error: `upstream unreachable: ${proxy.lastError}` });
 		else res.destroy();
 	});
@@ -643,7 +1288,7 @@ function proxyHandler(state) {
 		}
 		forward(state, req, res).catch((error) => {
 			state.proxy.stats.errors += 1;
-			state.proxy.lastError = String(error && error.message ? error.message : error);
+			state.proxy.lastError = messageOf(error);
 			try {
 				if (!res.headersSent) sendJson(res, 502, { error: state.proxy.lastError });
 				else res.destroy();
@@ -665,25 +1310,26 @@ function startProxy(state) {
 	server.keepAliveTimeout = 65_000;
 	server.headersTimeout = 70_000;
 	server.on("clientError", (error, socket) => {
-		state.proxy.lastError = `client error: ${String(error && error.message ? error.message : error)}`;
+		state.proxy.lastError = `client error: ${messageOf(error)}`;
 		if (socket.writable) socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
 	});
 	return new Promise((resolve, reject) => {
 		server.once("error", (error) => {
-			state.proxy.lastError = String(error && error.message ? error.message : error);
+			state.proxy.lastError = messageOf(error);
 			reject(error);
 		});
-		server.listen(state.runtime.port, "127.0.0.1", () => {
+		server.listen(state.runtime.port, LISTEN_HOST, () => {
 			server.removeAllListeners("error");
 			server.on("error", (error) => {
-				state.proxy.lastError = String(error && error.message ? error.message : error);
+				state.proxy.lastError = messageOf(error);
 				state.logger.warn(`api-relay-bridge: 代理服务器错误（${state.proxy.lastError}）`);
 			});
 			state.proxy.server = server;
 			state.proxy.startedAt = new Date().toISOString();
 			state.proxy.lastError = null;
+			const routes = Object.keys(state.mapping.providers).length;
 			state.logger.info(
-				`api-relay-bridge: 代理已监听 http://127.0.0.1:${state.runtime.port} → ${state.runtime.upstream}（mode=${state.runtime.mode}）`
+				`api-relay-bridge: 代理已监听 ${listenAddress(state.runtime)}（mode=${state.runtime.mode}，路由 ${routes} 个 provider，默认上游 ${state.runtime.upstream || "未设置"}）`
 			);
 			resolve(proxySnapshot(state));
 		});
@@ -703,7 +1349,7 @@ function stopProxy(state) {
 	return new Promise((resolve) => {
 		server.closeAllConnections?.();
 		server.close(() => {
-			state.logger.info(`api-relay-bridge: 代理已停止（127.0.0.1:${state.runtime.port}）`);
+			state.logger.info(`api-relay-bridge: 代理已停止（${LISTEN_HOST}:${state.runtime.port}）`);
 			resolve(proxySnapshot(state));
 		});
 		setTimeout(() => resolve(proxySnapshot(state)), 500);
@@ -713,7 +1359,7 @@ function stopProxy(state) {
 /** TCP 端口连通性探测。 */
 function probePort(port, timeoutMs = 1500) {
 	return new Promise((resolve) => {
-		const socket = net.connect({ host: "127.0.0.1", port });
+		const socket = net.connect({ host: LISTEN_HOST, port });
 		const done = (ok, detail) => {
 			socket.removeAllListeners();
 			socket.destroy();
@@ -726,7 +1372,7 @@ function probePort(port, timeoutMs = 1500) {
 }
 
 /** 上游可达性探测（任意 HTTP 状态码都算可达）。 */
-function probeUpstream(upstream, timeoutMs = 8000) {
+function probeUpstream(upstream, timeoutMs = 6000) {
 	if (typeof upstream !== "string" || upstream.length === 0) {
 		return Promise.resolve({ ok: false, detail: "未配置上游地址", ms: 0 });
 	}
@@ -742,7 +1388,14 @@ function probeUpstream(upstream, timeoutMs = 8000) {
 			const url = new URL(upstream);
 			const lib = url.protocol === "https:" ? https : http;
 			const req = lib.request(
-				{ protocol: url.protocol, hostname: url.hostname, port: url.port || (url.protocol === "https:" ? 443 : 80), path: "/", method: "GET", timeout: timeoutMs },
+				{
+					protocol: url.protocol,
+					hostname: url.hostname,
+					port: url.port || (url.protocol === "https:" ? 443 : 80),
+					path: url.pathname.length > 0 ? url.pathname : "/",
+					method: "GET",
+					timeout: timeoutMs,
+				},
 				(res) => {
 					res.resume();
 					finish(true, `HTTP ${res.statusCode ?? 0}`);
@@ -752,10 +1405,10 @@ function probeUpstream(upstream, timeoutMs = 8000) {
 				req.destroy(new Error("timeout"));
 				finish(false, "连接超时");
 			});
-			req.on("error", (error) => finish(false, String(error && error.message ? error.message : error)));
+			req.on("error", (error) => finish(false, messageOf(error)));
 			req.end();
 		} catch (error) {
-			finish(false, String(error && error.message ? error.message : error));
+			finish(false, messageOf(error));
 		}
 	});
 }
@@ -773,7 +1426,7 @@ function probePipeline(port, timeoutMs = 4000) {
 		);
 		const req = http.request(
 			{
-				host: "127.0.0.1",
+				host: LISTEN_HOST,
 				port,
 				path: PROXY_SELFTEST_PATH,
 				method: "POST",
@@ -802,28 +1455,67 @@ function probePipeline(port, timeoutMs = 4000) {
 			req.destroy(new Error("timeout"));
 			resolve({ ok: false, detail: "自检超时", ms: Date.now() - started });
 		});
-		req.on("error", (error) => resolve({ ok: false, detail: String(error && error.message ? error.message : error), ms: Date.now() - started }));
+		req.on("error", (error) => resolve({ ok: false, detail: messageOf(error), ms: Date.now() - started }));
 		req.end(body);
 	});
 }
 
 /**
- * 跑一次完整检测：端口、上游、改写管线。
+ * 检测各 provider 的 baseURL 是否已指向本代理，不是就自动改。
+ * @param {object} state - 安装状态。
+ * @returns {Promise<{ok: boolean, detail: string, fixed: string[], pending: string[], error: string | null}>} 结果。
+ */
+async function ensureCoverage(state) {
+	const live = await readDshProviders(state, true);
+	if (!live.ok) {
+		return { ok: false, detail: live.error ?? "读不到 DSH 模型设置", fixed: [], pending: [], error: live.error };
+	}
+	const listen = listenAddress(state.runtime);
+	const providers = Object.entries(live.providers);
+	if (providers.length === 0) return { ok: true, detail: "DSH 里没有 provider", fixed: [], pending: [], error: null };
+	const pending = providers.filter(([, profile]) => !isListenUrl(profile && profile.baseURL, state.runtime.port)).map(([pid]) => pid);
+	if (pending.length === 0) {
+		return { ok: true, detail: `${providers.length} 个 provider 的 baseURL 均已指向 ${listen}`, fixed: [], pending: [], error: null };
+	}
+	const covered = await coverProviders(state, pending);
+	if (!covered.ok) {
+		return { ok: false, detail: `${pending.length} 个 provider 未指向代理，自动改写失败：${covered.error}`, fixed: [], pending, error: covered.error };
+	}
+	return {
+		ok: true,
+		detail: `已自动把 ${pending.length} 个 provider（${pending.join("、")}）的 baseURL 改写为 ${listen}`,
+		fixed: pending,
+		pending: [],
+		error: null,
+	};
+}
+
+/**
+ * 跑一次完整检测：端口、baseURL 覆盖、上游可达、改写管线。
  * @param {object} state - 安装状态。
  * @returns {Promise<Record<string, unknown>>} 检测结果。
  */
 async function runCheck(state) {
 	const port = state.runtime.port;
 	const portResult = await probePort(port);
-	const upstreamResult = await probeUpstream(state.runtime.upstream);
+	const coverage = await ensureCoverage(state);
+	const upstreams = [...new Set(Object.values(state.mapping.providers).map((entry) => entry.upstream || entry.original).filter((value) => typeof value === "string" && value.length > 0))];
+	if (state.runtime.upstream.length > 0 && !upstreams.includes(state.runtime.upstream)) upstreams.push(state.runtime.upstream);
+	const probes = await Promise.all(upstreams.map((upstream) => probeUpstream(upstream)));
+	const upstreamOk = upstreams.length > 0 && probes.every((probe) => probe.ok);
+	const upstreamDetail =
+		upstreams.length === 0
+			? "没有任何上游地址（先点「覆盖」）"
+			: probes.map((probe, index) => `${upstreams[index]} ${probe.detail} ${probe.ms}ms`).join(" ｜ ");
 	const pipelineResult = portResult.ok ? await probePipeline(port) : { ok: false, detail: "端口未监听，跳过", ms: 0 };
 	const checks = [
-		{ id: "listen", label: "代理端口", ok: portResult.ok, detail: portResult.ok ? `127.0.0.1:${port} 已监听` : `${portResult.detail}` },
-		{ id: "upstream", label: "上游可达", ok: upstreamResult.ok, detail: `${state.runtime.upstream} · ${upstreamResult.detail} · ${upstreamResult.ms}ms` },
+		{ id: "listen", label: "代理端口", ok: portResult.ok, detail: portResult.ok ? `${LISTEN_HOST}:${port} 已监听` : `${portResult.detail}` },
+		{ id: "coverage", label: "baseURL 覆盖", ok: coverage.ok, detail: coverage.detail },
+		{ id: "upstream", label: "上游可达", ok: upstreamOk, detail: upstreamDetail },
 		{ id: "rewrite", label: "改写管线", ok: pipelineResult.ok, detail: `${pipelineResult.detail} · ${pipelineResult.ms}ms` },
 	];
 	const ok = checks.every((item) => item.ok);
-	state.proxy.check = { at: new Date().toISOString(), ok, checks };
+	state.proxy.check = { at: new Date().toISOString(), ok, checks, coverage };
 	if (!ok) state.proxy.lastError = checks.find((item) => !item.ok)?.detail ?? null;
 	return state.proxy.check;
 }
@@ -860,17 +1552,106 @@ async function layering(state) {
 }
 
 /**
+ * 把映射表和 DSH 实时配置合并成面板要用的行。
+ * @param {object} state - 安装状态。
+ * @param {object} dsh - readDshProviders 结果。
+ * @returns {Record<string, unknown>} 路由快照。
+ */
+function routingSnapshot(state, dsh) {
+	const listen = listenAddress(state.runtime);
+	const rows = [];
+	const providers = [];
+	const live = dsh.ok ? dsh.providers : {};
+	const seen = new Set();
+	for (const [pid, profile] of Object.entries(live)) {
+		const record = state.mapping.providers[pid];
+		const baseURL = typeof profile?.baseURL === "string" ? profile.baseURL : "";
+		const covered = isListenUrl(baseURL, state.runtime.port);
+		const providerUpstream = record ? record.upstream || record.original : normalizeUpstream(baseURL);
+		const models = modelIdsOf(profile);
+		providers.push({
+			id: pid,
+			displayName: typeof profile?.displayName === "string" && profile.displayName.length > 0 ? profile.displayName : pid,
+			api: typeof profile?.api === "string" ? profile.api : "",
+			baseURL,
+			covered,
+			upstream: providerUpstream,
+			original: record ? record.original : "",
+			models: models.length,
+		});
+		for (const model of models) {
+			const row = record?.models?.[model.id];
+			rows.push({
+				key: `${pid}::${model.id}`,
+				provider: pid,
+				providerName: typeof profile?.displayName === "string" && profile.displayName.length > 0 ? profile.displayName : pid,
+				api: typeof profile?.api === "string" ? profile.api : "",
+				model: model.id,
+				modelName: model.name,
+				baseURL,
+				covered,
+				upstream: row && row.upstream.length > 0 ? row.upstream : providerUpstream,
+				original: row && row.original.length > 0 ? row.original : record ? record.original : "",
+				source: row ? row.source : "original",
+				missing: !record,
+			});
+			seen.add(`${pid}::${model.id}`);
+		}
+	}
+	for (const [pid, record] of Object.entries(state.mapping.providers)) {
+		if (live[pid] !== undefined) continue;
+		for (const [mid, row] of Object.entries(record.models)) {
+			if (seen.has(`${pid}::${mid}`)) continue;
+			rows.push({
+				key: `${pid}::${mid}`,
+				provider: pid,
+				providerName: record.displayName || pid,
+				api: record.api,
+				model: mid,
+				modelName: mid,
+				baseURL: "",
+				covered: false,
+				upstream: row.upstream || record.upstream || record.original,
+				original: row.original || record.original,
+				source: row.source,
+				stale: true,
+				missing: false,
+			});
+		}
+	}
+	const coveredCount = providers.filter((provider) => provider.covered).length;
+	return {
+		listen,
+		header: ROUTE_HEADER,
+		dsh: { ok: dsh.ok, ns: dsh.ns, source: dsh.source, error: dsh.error },
+		defaults: { upstream: state.runtime.upstream },
+		rows,
+		providers,
+		stats: {
+			models: rows.length,
+			covered: coveredCount,
+			providers: providers.length,
+			uncovered: providers.length - coveredCount,
+			mapped: rows.filter((row) => row.source === "manual").length,
+		},
+		updatedAt: state.mapping.updatedAt,
+	};
+}
+
+/**
  * 构造面板读取的状态快照。
  * @param {object} state - 安装状态。
  * @returns {Promise<Record<string, unknown>>} 快照。
  */
 async function snapshot(state) {
 	const layer = await layering(state);
+	const dsh = await readDshProviders(state);
 	return {
 		plugin: PLUGIN,
 		version: VERSION,
 		proxy: proxySnapshot(state),
 		check: state.proxy.check ?? null,
+		routing: routingSnapshot(state, dsh),
 		fallback: {
 			installed: layer.installed,
 			position: layer.position,
@@ -986,7 +1767,7 @@ function installRoutes(ws, state) {
 			try {
 				sendJson(res, 200, await snapshot(state));
 			} catch (error) {
-				state.logger.warn(`api-relay-bridge: 状态路由失败（${String(error && error.message ? error.message : error)}）`);
+				state.logger.warn(`api-relay-bridge: 状态路由失败（${messageOf(error)}）`);
 				try {
 					sendJson(res, 500, { error: "internal error" });
 				} catch {
@@ -1025,11 +1806,93 @@ function installRoutes(ws, state) {
 					sendJson(res, 200, { action, ok: check.ok, ...(await snapshot(state)) });
 					return;
 				}
+				if (action === "cover") {
+					const ids = Array.isArray(body.providers) ? body.providers : undefined;
+					const covered = await coverProviders(state, ids);
+					// 覆盖之后 provider 的 baseURL 已经指向本代理，代理必须同时在监听，否则下次请求会连接被拒。
+					if (covered.ok && covered.covered.length > 0 && state.proxy.server === null) {
+						state.runtime.enabled = true;
+						saveOverrides(state.runtime);
+						try {
+							await startProxy(state);
+						} catch (error) {
+							state.logger.warn(`api-relay-bridge: 覆盖后启动代理失败（${messageOf(error)}）`);
+						}
+					}
+					sendJson(res, 200, {
+						action,
+						ok: covered.ok,
+						error: covered.error,
+						covered: covered.covered,
+						...(await snapshot(state)),
+					});
+					return;
+				}
+				if (action === "uncover") {
+					const ids = Array.isArray(body.providers) ? body.providers : undefined;
+					const restored = await uncoverProviders(state, ids);
+					sendJson(res, 200, {
+						action,
+						ok: restored.ok,
+						error: restored.error,
+						restored: restored.restored,
+						skipped: restored.skipped,
+						...(await snapshot(state)),
+					});
+					return;
+				}
 				sendJson(res, 400, { error: `unknown action: ${action}` });
 			} catch (error) {
-				state.logger.warn(`api-relay-bridge: 代理控制失败（${String(error && error.message ? error.message : error)}）`);
+				state.logger.warn(`api-relay-bridge: 代理控制失败（${messageOf(error)}）`);
 				try {
-					sendJson(res, 500, { error: String(error && error.message ? error.message : error) });
+					sendJson(res, 500, { error: messageOf(error) });
+				} catch {
+					/* 响应已结束 */
+				}
+			}
+		},
+	});
+
+	mount({
+		kind: "exact",
+		path: ROUTE_MODELS,
+		handler: async (req, res) => {
+			if (req.method !== "POST") {
+				sendJson(res, 405, { error: "method not allowed" });
+				return;
+			}
+			try {
+				const body = (await readJsonBody(req)) ?? {};
+				const action = typeof body.action === "string" ? body.action : "";
+				const provider = typeof body.provider === "string" ? body.provider : "";
+				const model = typeof body.model === "string" ? body.model : "";
+				if (action === "set-upstream") {
+					const result = setModelUpstream(state, provider, model, typeof body.upstream === "string" ? body.upstream : "");
+					sendJson(res, 200, { action, ok: result.ok, error: result.error, ...(await snapshot(state)) });
+					return;
+				}
+				if (action === "delete-model") {
+					const result = await deleteModelRoute(state, provider, model);
+					sendJson(res, 200, {
+						action,
+						ok: result.ok,
+						error: result.error,
+						warning: result.warning,
+						removedProvider: result.removedProvider,
+						...(await snapshot(state)),
+					});
+					return;
+				}
+				if (action === "refresh") {
+					state.dshCache = undefined;
+					sendJson(res, 200, { action, ok: true, ...(await snapshot(state)) });
+					return;
+				}
+				sendJson(res, 400, { error: `unknown action: ${action}` });
+			} catch (error) {
+				state.logger.warn(`api-relay-bridge: 模型路由操作失败（${messageOf(error)}）`);
+				try {
+					sendJson(res, 500, { error: messageOf(error) });
 				} catch {
 					/* 响应已结束 */
 				}
@@ -1052,7 +1915,7 @@ function installRoutes(ws, state) {
 					return;
 				}
 				const changed = applyRuntime(state.runtime, patch);
-				if (changed.includes("port") || changed.includes("upstream")) {
+				if (changed.includes("port")) {
 					await stopProxy(state);
 					await startProxy(state);
 				}
@@ -1062,7 +1925,7 @@ function installRoutes(ws, state) {
 				}
 				sendJson(res, 200, { changed, ...(await snapshot(state)) });
 			} catch (error) {
-				state.logger.warn(`api-relay-bridge: 配置路由失败（${String(error && error.message ? error.message : error)}）`);
+				state.logger.warn(`api-relay-bridge: 配置路由失败（${messageOf(error)}）`);
 				try {
 					sendJson(res, 500, { error: "internal error" });
 				} catch {
@@ -1090,8 +1953,11 @@ function installRoutes(ws, state) {
 			state.proxy.stats.rewrites = 0;
 			state.proxy.stats.errors = 0;
 			state.proxy.stats.lastAt = null;
+			state.proxy.stats.byProvider = {};
+			state.proxy.lastAt = null;
 			state.proxy.lastError = null;
 			state.proxy.check = null;
+			state.proxy.lastRoute = null;
 			state.recent.length = 0;
 			state.probeResult = undefined;
 			sendJson(res, 200, await snapshot(state));
@@ -1133,6 +1999,8 @@ function acquire(runtime, logger) {
 		shared.refs += 1;
 		shared.runtime = runtime;
 		shared.logger = logger;
+		shared.mapping = loadMapping();
+		shared.host = shared.host ?? {};
 		return () => release(shared, logger);
 	}
 	const original = globalThis.fetch;
@@ -1146,12 +2014,16 @@ function acquire(runtime, logger) {
 		recent: [],
 		routes: new Map(),
 		announced: false,
+		mapping: loadMapping(),
+		host: {},
+		dshCache: undefined,
 		proxy: {
 			server: null,
 			startedAt: null,
 			lastError: null,
 			check: null,
-			stats: { requests: 0, rewrites: 0, errors: 0, lastAt: null },
+			lastRoute: null,
+			stats: { requests: 0, rewrites: 0, errors: 0, lastAt: null, byProvider: {} },
 		},
 	};
 	state.wrapper = async function bridgedFetch(input, init) {
@@ -1168,7 +2040,7 @@ function acquire(runtime, logger) {
 			rewritten = await intercept(input, init, state);
 		} catch (error) {
 			state.stats.failures += 1;
-			state.logger.warn(`api-relay-bridge: 兜底拦截失败，按原请求放行（${String(error && error.message ? error.message : error)}）`);
+			state.logger.warn(`api-relay-bridge: 兜底拦截失败，按原请求放行（${messageOf(error)}）`);
 			return (state.original ?? original)(input, init);
 		}
 		if (rewritten === undefined) return (state.original ?? original)(input, init);
@@ -1222,6 +2094,8 @@ async function intercept(input, init, state) {
 	record(state, {
 		at: state.stats.lastAt,
 		host: new URL(url).host,
+		provider: "",
+		model: typeof parsed.model === "string" ? parsed.model : "",
 		systemChars: systemText.length,
 		mode: settings.mode,
 		via: "fetch",
@@ -1253,12 +2127,32 @@ export function apply(ctx, config) {
 	const runtime = { ...normalizeConfig(config), ...loadOverrides() };
 	ctx.effect(() => acquire(runtime, ctx.logger), "api-relay-bridge.install()");
 	const state = globalThis[STATE_KEY];
-	if (runtime.enabled && runtime.upstream.length === 0) {
+	if (state === undefined) return;
+	ctx.inject(["configEditor"], (sub) => {
+		state.host = state.host ?? {};
+		state.host.configEditor = sub.configEditor;
+		state.dshCache = undefined;
+		return () => {
+			if (state.host?.configEditor === sub.configEditor) state.host.configEditor = undefined;
+			state.dshCache = undefined;
+		};
+	});
+	ctx.inject(["settings"], (sub) => {
+		state.host = state.host ?? {};
+		state.host.settings = sub.settings;
+		state.dshCache = undefined;
+		return () => {
+			if (state.host?.settings === sub.settings) state.host.settings = undefined;
+			state.dshCache = undefined;
+		};
+	});
+	const hasRoutes = Object.keys(state.mapping.providers).length > 0;
+	if (runtime.enabled && runtime.upstream.length === 0 && !hasRoutes) {
 		state.proxy.lastError = "未配置上游地址（upstream）";
-		ctx.logger.warn("api-relay-bridge: 未配置上游地址，代理未启动。请在面板「监听设置」填写上游，或设置配置项 upstream。");
+		ctx.logger.warn("api-relay-bridge: 还没有任何上游地址，代理虽已监听但无法转发。请在面板点「覆盖」自动登记上游，或填写默认上游。");
 	} else if (runtime.enabled) {
 		startProxy(state).catch((error) => {
-			ctx.logger.warn(`api-relay-bridge: 代理启动失败（${String(error && error.message ? error.message : error)}）`);
+			ctx.logger.warn(`api-relay-bridge: 代理启动失败（${messageOf(error)}）`);
 		});
 	}
 	let disposeRoutes = () => {};
@@ -1273,5 +2167,5 @@ export function apply(ctx, config) {
 export const name = PLUGIN;
 /** 插件版本。 */
 export const version = VERSION;
-/** 不依赖其它服务。 */
+/** 不依赖其它服务（settings / configEditor / webServer 走动态 inject）。 */
 export const inject = [];
