@@ -3,6 +3,12 @@ node_modules/
 api-relay-bridge/
 *.jsonl
 
+# 本地覆盖与备份（覆盖/还原会写，别提交）
+cordis.patch.yml.pre-*
+cordis.patch.yml.backup-*
+routing.json
+config.json
+
 # 编辑器 / 系统
 .DS_Store
 Thumbs.db
