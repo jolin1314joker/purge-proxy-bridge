@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.2.0
+
+多上游：一次覆盖，按模型分流。DSH 的 provider 只能持有一个 baseURL，所以「不同模型走不同中转站」只能在代理侧完成。
+
+- **新增**：**覆盖 / 还原** 两个动作。覆盖用 `configEditor.edit` 把每个 provider 的 `baseURL` 改成 `http://127.0.0.1:8790`，同时写入内部路由头 `headers["x-relay-route"] = <providerId>`；覆盖前记录原始地址，还原时写回并删掉路由头。覆盖后若代理未在监听会顺手拉起，避免 baseURL 指过来却全线 `ECONNREFUSED`。
+- **新增**：**模型 · 上游对照表**（面板下方，按 provider 分组）。每个模型一行：模型 id、当前生效的上游地址（输入框可直接改，Enter 保存 / Esc 取消）、删除按钮（二次确认）；组头显示 displayName、provider id、api 协议、`baseURL 已指向代理` 标记与当前 baseURL。DSH 里已经没有的模型标 `DSH 已无`，映射表里没有的标 `未记录`。
+- **新增**：**上游解析链**：路由头 → 路径前缀 `/<provider>/…` → 请求体 `model` 名（同名模型用 API 协议消歧）→ 默认上游兜底。全部落空返回 `503 upstream not configured`。路由头不转发给上游。
+- **新增**：`/relay-bridge/models` 路由，动作 `set-upstream` / `delete-model` / `refresh`；`/relay-bridge/proxy` 增加 `cover` / `uncover`（可带 `providers: []` 只处理指定 provider）。
+- **新增**：删除模型会同步从 profile 的 `llm-pi-ai.providers` 里移除；删掉某 provider 的最后一个模型时整条 provider 一并删除，并检查是否有 entry（如 `agent-default-model`）还指着它，是则返回 `warning`。
+- **变更**：检测从 3 项变 4 项，新增 **baseURL 覆盖**：发现哪个 provider 的 baseURL 不是本代理就自动改写回去，并在详情里列出被改的 provider id。
+- **变更**：`upstream` 从「唯一上游」降为「默认上游（兜底）」；改端口才重启代理，改上游不再重启。
+- **修复**：`providers` 在 live 配置里是 schemastery 的 volatile 包装且被冻结，写回时现在先深拷贝成纯对象（此前覆盖会抛 `Cannot assign to read only property`）。
+- **修复**：`normalizeUpstream` 不再吞掉上游地址里的路径前缀（`https://host/v1` 会保留 `/v1` 并按前缀拼接转发路径）。
+
 ## 2.1.0
 
 去具体化，变成一个可以公开的通用工具。
