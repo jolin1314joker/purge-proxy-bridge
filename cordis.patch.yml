@@ -2,9 +2,12 @@
 #
 # 宿主半边会监听 127.0.0.1:8790，把 Anthropic 请求顶层的 system 折叠进第一条
 # user 消息后置空，再流式转发到上游；客户端半边在左侧栏挂一个「中转站桥」面板，
-# 提供检测 / 启用 / 停止三个动作。provider 的 baseURL 需要指向下面的监听地址。
+# 提供检测 / 覆盖 / 还原 / 启用 / 停止五个动作，下面是「模型 · 上游对照表」。
+# provider 的 baseURL 需要指向下面的监听地址（点「覆盖」自动改）。
 #
-# upstream 故意留空：上游地址属于部署方的私事，不写进仓库。两种填法——
+# upstream 故意留空：上游地址属于部署方的私事，不写进仓库。它是「默认上游」，
+# 只在路由头、路径前缀、模型名都没命中时兜底；日常分流靠面板上的对照表
+# （存于 ~/.dsh/api-relay-bridge/routing.json）。两种填法——
 #   1) 面板「监听设置」里填写并保存（写入 ~/.dsh/api-relay-bridge/config.json）
 #   2) 在 profile 的 cordis.patch.yml 里覆盖本插件的 config.upstream
 - insert:
