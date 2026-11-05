@@ -2,11 +2,13 @@
  * dsh-api-relay-bridge — 客户端半边（中转站桥）。
  *
  * 在左侧栏注册一个全局面板图标（sidebar.panellist），并在主列注册同名面板
- * （main，key 与图标 id 一致）。面板显示本地代理的实时状态，并提供检测/启用/停止
- * 三个动作；所有改写与转发都在宿主半边完成。
+ * （main，key 与图标 id 一致）。面板显示本地代理的实时状态，提供检测/覆盖/还原/
+ * 启用/停止动作，并在下方的「模型 · 上游对照表」里逐模型查看和修改上游地址、
+ * 删除模型（与 DSH 模型设置同步）。所有改写与转发都在宿主半边完成。
  *
- * 数据回路：GET /relay-bridge/status 轮询；POST /relay-bridge/proxy 控制代理；
- * POST /relay-bridge/config 提交配置；POST /relay-bridge/reset 清空统计。
+ * 数据回路：GET /relay-bridge/status 轮询；POST /relay-bridge/proxy 控制代理与
+ * 覆盖；POST /relay-bridge/models 维护模型映射；POST /relay-bridge/config 提交
+ * 配置；POST /relay-bridge/reset 清空统计。
  */
 window.__ModuleLoader__.load({
   id: "dsh-api-relay-bridge",
@@ -87,11 +89,19 @@ window.__ModuleLoader__.load({
 .ab-row-d{font-size:11px;color:var(--dsw-alias-label-tertiary,#94a3b8);word-break:break-all}
 .ab-btn{appearance:none;border:1px solid var(--dsw-alias-border-l2,rgba(148,163,184,.35));
   background:var(--dsw-alias-button-tool-bar-fill,transparent);color:var(--dsw-alias-label-primary,#e2e8f0);
-  border-radius:8px;padding:5px 13px;font-size:12px;cursor:pointer;transition:background .12s,border-color .12s}
+  border-radius:8px;padding:5px 13px;font-size:12px;line-height:18px;cursor:pointer;
+  transition:background .12s,border-color .12s,color .12s;white-space:nowrap}
 .ab-btn:hover:not(:disabled){background:var(--dsw-alias-button-tool-bar-hover,rgba(148,163,184,.16))}
 .ab-btn:disabled{opacity:.45;cursor:not-allowed}
-.ab-btn.primary{background:var(--dsw-alias-button-primary-fill,#2563eb);border-color:transparent;color:#fff}
+.ab-btn.primary{background:var(--dsw-alias-button-primary-fill,#2563eb);border-color:transparent;
+  color:var(--dsw-alias-label-primary-foreground,#fff)}
 .ab-btn.primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover,#1d4ed8)}
+.ab-btn.primary:disabled{opacity:1;background:transparent;border-color:var(--dsw-alias-border-l2,rgba(148,163,184,.35));
+  color:var(--dsw-alias-label-tertiary,#94a3b8)}
+.ab-btn.danger{color:var(--dsw-alias-state-error-primary,#ef4444);
+  border-color:var(--dsw-alias-state-error-primary,rgba(239,68,68,.45))}
+.ab-btn.danger:hover:not(:disabled){background:rgba(239,68,68,.12)}
+.ab-btn.sm{padding:3px 9px;font-size:11px;line-height:16px}
 .ab-seg{display:inline-flex;border:1px solid var(--dsw-alias-border-l2,rgba(148,163,184,.35));
   border-radius:8px;overflow:hidden}
 .ab-seg button{appearance:none;border:0;background:transparent;color:var(--dsw-alias-label-secondary,#cbd5e1);
@@ -114,15 +124,36 @@ window.__ModuleLoader__.load({
 .ab-tags{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .ab-tag{font-size:11px;padding:1px 7px;border-radius:999px;
   border:1px solid var(--dsw-alias-border-l2,rgba(148,163,184,.35));
-  color:var(--dsw-alias-label-tertiary,#94a3b8)}
+  color:var(--dsw-alias-label-tertiary,#94a3b8);white-space:nowrap}
+.ab-tag.ok{color:var(--dsw-alias-state-success-primary,#10b981);
+  border-color:var(--dsw-alias-state-success-primary,rgba(16,185,129,.4))}
+.ab-tag.warn{color:var(--dsw-alias-state-warn-primary,#f59e0b);
+  border-color:var(--dsw-alias-state-warn-primary,rgba(245,158,11,.45))}
 .ab-ok{color:var(--dsw-alias-state-success-primary,#10b981);font-weight:600}
 .ab-bad{color:var(--dsw-alias-state-error-primary,#ef4444);font-weight:600}
-.ab-err{font-size:12px;color:var(--dsw-alias-label-error,#f87171);word-break:break-all}
+.ab-err{font-size:12px;color:var(--dsw-alias-state-error-primary,#f87171);word-break:break-all}
 .ab-muted{font-size:12px;color:var(--dsw-alias-label-tertiary,#94a3b8)}
 .ab-empty{font-size:12px;color:var(--dsw-alias-label-tertiary,#94a3b8);padding:10px 0;text-align:center}
 .ab-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .ab-field{display:flex;flex-direction:column;gap:4px}
 .ab-field-k{font-size:11px;color:var(--dsw-alias-label-tertiary,#94a3b8)}
+.ab-group{border-top:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.18));padding-top:8px;margin-top:8px}
+.ab-group:first-of-type{border-top:0;padding-top:0;margin-top:0}
+.ab-group-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.ab-group-n{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary,#e2e8f0)}
+.ab-mrow{display:grid;grid-template-columns:minmax(140px,1.05fr) minmax(180px,2fr) auto;
+  gap:8px;align-items:center;padding:5px 0}
+.ab-mrow-m{display:flex;flex-direction:column;gap:1px;min-width:0}
+.ab-mrow-id{font-family:var(--ds-font-family-code,ui-monospace,Menlo,Consolas,monospace);
+  font-size:11.5px;color:var(--dsw-alias-label-primary,#e2e8f0);word-break:break-all}
+.ab-mrow-n{font-size:11px;color:var(--dsw-alias-label-tertiary,#94a3b8);word-break:break-all}
+.ab-mrow-a{display:flex;gap:6px;align-items:center;justify-content:flex-end}
+.ab-note{font-size:11.5px;color:var(--dsw-alias-state-warn-primary,#f59e0b);word-break:break-all}
+@media (max-width:640px){
+  .ab-mrow{grid-template-columns:1fr;align-items:stretch}
+  .ab-mrow-a{justify-content:flex-start}
+  .ab-grid2{grid-template-columns:1fr}
+}
 `
       );
     }
@@ -134,15 +165,27 @@ window.__ModuleLoader__.load({
       return res.json();
     }
 
-    /** 控制代理：start / stop / check。 */
-    async function callProxy(action) {
+    /** 控制代理：start / stop / check / cover / uncover。 */
+    async function callProxy(action, extra) {
       const res = await fetch("/relay-bridge/proxy", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, ...(extra ?? {}) }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
+    }
+
+    /** 维护模型映射：set-upstream / delete-model / refresh。 */
+    async function callModels(payload) {
+      const res = await fetch("/relay-bridge/models", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data && data.error ? data.error : `HTTP ${res.status}`);
+      return data ?? {};
     }
 
     /** 提交配置补丁。 */
@@ -185,14 +228,41 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /** 按 provider 分组，保留宿主给的顺序。 */
+    function groupRows(rows) {
+      const groups = [];
+      const index = new Map();
+      for (const row of rows) {
+        let group = index.get(row.provider);
+        if (group === undefined) {
+          group = {
+            provider: row.provider,
+            providerName: row.providerName,
+            api: row.api,
+            covered: row.covered,
+            baseURL: row.baseURL,
+            rows: [],
+          };
+          index.set(row.provider, group);
+          groups.push(group);
+        }
+        group.rows.push(row);
+      }
+      return groups;
+    }
+
     /** 面板主体。 */
     function Panel() {
       const [data, setData] = useState(null);
       const [error, setError] = useState("");
+      const [notice, setNotice] = useState("");
       const [busy, setBusy] = useState("");
       const [port, setPort] = useState("");
       const [upstream, setUpstream] = useState("");
+      const [drafts, setDrafts] = useState({});
+      const [confirmKey, setConfirmKey] = useState("");
       const dirty = useRef(false);
+      const draftKeys = useRef(new Set());
 
       const apply = (next) => {
         setData(next);
@@ -200,7 +270,6 @@ window.__ModuleLoader__.load({
         if (!dirty.current && next && next.proxy) {
           setPort(String(next.proxy.port ?? ""));
           setUpstream(String(next.proxy.upstream ?? ""));
-          dirty.current = false;
         }
       };
 
@@ -222,42 +291,95 @@ window.__ModuleLoader__.load({
         };
       }, []);
 
-      const act = async (action) => {
+      /** 统一跑一个异步动作：置 busy、清错、套用返回的快照。 */
+      const run = async (action, task) => {
         setBusy(action);
+        setError("");
+        setNotice("");
         try {
-          const next = await callProxy(action);
-          dirty.current = false;
-          apply(next);
+          const next = await task();
+          if (next && next.proxy) apply(next);
+          return next ?? null;
         } catch (err) {
           setError(String(err && err.message ? err.message : err));
+          return null;
         } finally {
           setBusy("");
         }
       };
 
-      const save = async () => {
-        setBusy("save");
-        try {
+      const act = (action) =>
+        run(action, async () => {
+          const payload = await callProxy(action);
+          if (payload && payload.ok === false && payload.error) setError(String(payload.error));
+          if (action === "cover" && Array.isArray(payload.covered) && payload.covered.length > 0) {
+            setNotice(`已覆盖 ${payload.covered.length} 个 provider，baseURL 已指向 ${payload.listen ?? "本代理"}`);
+          }
+          if (action === "uncover" && Array.isArray(payload.restored)) {
+            setNotice(
+              payload.restored.length > 0
+                ? `已还原 ${payload.restored.length} 个 provider 的 baseURL`
+                : "没有可还原的 provider"
+            );
+          }
+          return payload;
+        });
+
+      const save = () =>
+        run("save", async () => {
           const next = await submitConfig({ port: Number(port), upstream });
           dirty.current = false;
-          apply(next);
-        } catch (err) {
-          setError(String(err && err.message ? err.message : err));
-        } finally {
-          setBusy("");
-        }
-      };
+          return next;
+        });
 
-      const clear = async () => {
-        setBusy("reset");
-        try {
-          apply(await submitReset());
-        } catch (err) {
-          setError(String(err && err.message ? err.message : err));
-        } finally {
-          setBusy("");
-        }
-      };
+      const clear = () => run("reset", () => submitReset());
+
+      const refreshRoutes = () => run("refresh", () => callModels({ action: "refresh" }));
+
+      const saveUpstream = (row) =>
+        run(`save:${row.key}`, async () => {
+          const value = draftKeys.current.has(row.key) ? drafts[row.key] : row.upstream;
+          const payload = await callModels({
+            action: "set-upstream",
+            provider: row.provider,
+            model: row.model,
+            upstream: typeof value === "string" ? value.trim() : "",
+          });
+          if (payload.ok === false) {
+            setError(String(payload.error ?? "保存失败"));
+            return payload;
+          }
+          draftKeys.current.delete(row.key);
+          setDrafts((prev) => {
+            const next = { ...prev };
+            delete next[row.key];
+            return next;
+          });
+          setNotice(`${row.provider}/${row.model} 的上游已更新`);
+          return payload;
+        });
+
+      const removeModel = (row) =>
+        run(`del:${row.key}`, async () => {
+          const payload = await callModels({
+            action: "delete-model",
+            provider: row.provider,
+            model: row.model,
+          });
+          setConfirmKey("");
+          if (payload.ok === false) {
+            setError(String(payload.error ?? "删除失败"));
+            return payload;
+          }
+          draftKeys.current.delete(row.key);
+          setNotice(
+            payload.warning
+              ? String(payload.warning)
+              : `已从 DSH 模型设置中删除 ${row.provider}/${row.model}` +
+                (payload.removedProvider ? "（该 provider 已无模型，整条移除）" : "")
+          );
+          return payload;
+        });
 
       const proxy = data && data.proxy ? data.proxy : null;
       const listening = proxy ? proxy.listening === true : false;
@@ -265,6 +387,14 @@ window.__ModuleLoader__.load({
       const stats = proxy && proxy.stats ? proxy.stats : {};
       const fallback = data && data.fallback ? data.fallback : null;
       const recent = data && Array.isArray(data.recent) ? data.recent : [];
+      const routing = data && data.routing ? data.routing : null;
+      const rows = routing && Array.isArray(routing.rows) ? routing.rows : [];
+      const groups = groupRows(rows);
+      const routeStats = routing && routing.stats ? routing.stats : {};
+      const coveredCount = typeof routeStats.covered === "number" ? routeStats.covered : 0;
+      const providerCount = typeof routeStats.providers === "number" ? routeStats.providers : 0;
+      const listenUrl = routing && routing.listen ? routing.listen : proxy && proxy.listen ? proxy.listen : "";
+      const lastRoute = proxy && proxy.lastRoute ? proxy.lastRoute : null;
       const pillText = !proxy
         ? "正在读取状态…"
         : listening
@@ -285,7 +415,7 @@ window.__ModuleLoader__.load({
             "div",
             { className: "ab-head" },
             h("span", { className: "ab-title" }, "API 中转站桥"),
-            h("span", { className: "ab-ver" }, data ? `v${data.version}` : "v2.1.0"),
+            h("span", { className: "ab-ver" }, data ? `v${data.version}` : "v2.2.0"),
             h(
               "span",
               { className: "ab-pill", title: proxy && proxy.lastError ? proxy.lastError : "" },
@@ -303,7 +433,17 @@ window.__ModuleLoader__.load({
               ),
               h(
                 "button",
-                { className: "ab-btn primary", onClick: () => act("start"), disabled: busy !== "" || listening },
+                { className: "ab-btn primary", onClick: () => act("cover"), disabled: busy !== "" },
+                busy === "cover" ? "覆盖中…" : "覆盖"
+              ),
+              h(
+                "button",
+                { className: "ab-btn", onClick: () => act("uncover"), disabled: busy !== "" },
+                busy === "uncover" ? "还原中…" : "还原"
+              ),
+              h(
+                "button",
+                { className: "ab-btn", onClick: () => act("start"), disabled: busy !== "" || listening },
                 busy === "start" ? "启用中…" : "启用"
               ),
               h(
@@ -318,8 +458,17 @@ window.__ModuleLoader__.load({
             ? h(
                 "div",
                 { className: "ab-card" },
-                h("div", { className: "ab-card-h" }, h("span", { className: "ab-card-t" }, "连接异常")),
+                h("div", { className: "ab-card-h" }, h("span", { className: "ab-card-t" }, "操作失败")),
                 h("div", { className: "ab-err" }, error)
+              )
+            : null,
+
+          notice
+            ? h(
+                "div",
+                { className: "ab-card" },
+                h("div", { className: "ab-card-h" }, h("span", { className: "ab-card-t" }, "刚刚完成")),
+                h("div", { className: "ab-muted" }, notice)
               )
             : null,
 
@@ -341,8 +490,34 @@ window.__ModuleLoader__.load({
             h(
               "div",
               { className: "ab-row" },
-              h("div", { className: "ab-row-l" }, h("span", { className: "ab-row-k" }, "上游")),
-              h("div", { className: "ab-mono" }, proxy ? proxy.upstream : "—")
+              h(
+                "div",
+                { className: "ab-row-l" },
+                h("span", { className: "ab-row-k" }, "默认上游"),
+                h("span", { className: "ab-row-d" }, "请求里既无路由头、也无匹配模型时的兜底地址")
+              ),
+              h("div", { className: "ab-mono" }, proxy && proxy.defaultUpstream ? proxy.defaultUpstream : "未设置")
+            ),
+            h(
+              "div",
+              { className: "ab-row" },
+              h(
+                "div",
+                { className: "ab-row-l" },
+                h("span", { className: "ab-row-k" }, "当前路由"),
+                h(
+                  "span",
+                  { className: "ab-row-d" },
+                  lastRoute
+                    ? `${lastRoute.provider || "未知"} / ${lastRoute.model || "未知"} · 经 ${lastRoute.via}`
+                    : "还没有转发过请求"
+                )
+              ),
+              h(
+                "span",
+                { className: "ab-mono" },
+                lastRoute && lastRoute.at ? fmtTime(lastRoute.at) : "—"
+              )
             ),
             h(
               "div",
@@ -387,7 +562,7 @@ window.__ModuleLoader__.load({
                     )
                   )
                 )
-              : h("div", { className: "ab-empty" }, "点右上角「检测」验证端口、上游与改写管线")
+              : h("div", { className: "ab-empty" }, "点右上角「检测」验证端口、baseURL 覆盖、上游与改写管线")
           ),
 
           h(
@@ -443,10 +618,11 @@ window.__ModuleLoader__.load({
               h(
                 "label",
                 { className: "ab-field" },
-                h("span", { className: "ab-field-k" }, "上游"),
+                h("span", { className: "ab-field-k" }, "默认上游（可选）"),
                 h("input", {
                   className: "ab-input",
                   value: upstream,
+                  placeholder: "未匹配到模型时的兜底地址",
                   onChange: (event) => {
                     dirty.current = true;
                     setUpstream(event.target.value);
@@ -457,8 +633,174 @@ window.__ModuleLoader__.load({
             h(
               "div",
               { className: "ab-row" },
-              h("div", { className: "ab-row-l" }, h("span", { className: "ab-row-d" }, "改端口或上游会自动重启代理；DSH 的 provider baseURL 需指向这里的监听地址。")),
+              h(
+                "div",
+                { className: "ab-row-l" },
+                h("span", { className: "ab-row-d" }, "改端口会重启代理；上游按下面的模型对照表分流，默认上游只做兜底。")
+              ),
               h("button", { className: "ab-btn", onClick: save, disabled: busy !== "" }, busy === "save" ? "保存中…" : "保存")
+            )
+          ),
+
+          h(
+            "div",
+            { className: "ab-card" },
+            h(
+              "div",
+              { className: "ab-card-h" },
+              h(
+                "div",
+                { className: "ab-tags" },
+                h("span", { className: "ab-card-t" }, "模型 · 上游对照表"),
+                h(
+                  "span",
+                  { className: "ab-tag" },
+                  `${fmtNumber(routeStats.models)} 个模型`
+                ),
+                h(
+                  "span",
+                  { className: providerCount > 0 && coveredCount === providerCount ? "ab-tag ok" : "ab-tag warn" },
+                  `${fmtNumber(coveredCount)}/${fmtNumber(providerCount)} provider 已覆盖`
+                )
+              ),
+              h(
+                "div",
+                { className: "ab-actions" },
+                h("button", { className: "ab-btn sm", onClick: refreshRoutes, disabled: busy !== "" }, busy === "refresh" ? "刷新中…" : "刷新"),
+                h(
+                  "button",
+                  { className: "ab-btn sm", onClick: () => act("cover"), disabled: busy !== "" },
+                  busy === "cover" ? "覆盖中…" : "全部覆盖"
+                )
+              )
+            ),
+            routing && routing.dsh && routing.dsh.ok === false
+              ? h(
+                  "div",
+                  { className: "ab-row" },
+                  h(
+                    "div",
+                    { className: "ab-row-l" },
+                    h("span", { className: "ab-row-k" }, "读不到 DSH 模型设置"),
+                    h("span", { className: "ab-row-d" }, String(routing.dsh.error ?? "未知原因"))
+                  ),
+                  h("span", { className: "ab-bad" }, "失败")
+                )
+              : null,
+            rows.length === 0
+              ? h("div", { className: "ab-empty" }, "还没有可显示的模型。点「覆盖」把 DSH 里的 provider 接到本代理。")
+              : h(
+                  "div",
+                  null,
+                  groups.map((group) =>
+                    h(
+                      "div",
+                      { className: "ab-group", key: group.provider },
+                      h(
+                        "div",
+                        { className: "ab-group-h" },
+                        h("span", { className: "ab-group-n" }, group.providerName),
+                        h("span", { className: "ab-mono" }, group.provider),
+                        group.api ? h("span", { className: "ab-tag" }, group.api) : null,
+                        h(
+                          "span",
+                          { className: group.covered ? "ab-tag ok" : "ab-tag warn" },
+                          group.covered ? "baseURL 已指向代理" : "baseURL 未指向代理"
+                        ),
+                        h("span", { className: "ab-spacer" }),
+                        h("span", { className: "ab-mono" }, group.covered ? listenUrl || "—" : group.baseURL || "—")
+                      ),
+                      group.rows.map((row) => {
+                        const draft = draftKeys.current.has(row.key)
+                          ? drafts[row.key]
+                          : row.upstream;
+                        const changed =
+                          typeof draft === "string" && draft.trim() !== (row.upstream ?? "");
+                        const confirming = confirmKey === row.key;
+                        return h(
+                          "div",
+                          { className: "ab-mrow", key: row.key },
+                          h(
+                            "div",
+                            { className: "ab-mrow-m" },
+                            h("span", { className: "ab-mrow-id" }, row.model),
+                            h(
+                              "span",
+                              { className: "ab-mrow-n" },
+                              `${row.modelName && row.modelName !== row.model ? `${row.modelName} · ` : ""}${
+                                row.source === "manual" ? "自定义上游" : "沿用 provider 原始地址"
+                              }`
+                            )
+                          ),
+                          h(
+                            "div",
+                            { className: "ab-tags" },
+                            h("input", {
+                              className: "ab-input",
+                              value: typeof draft === "string" ? draft : "",
+                              placeholder: row.original || "https://上游地址",
+                              spellCheck: false,
+                              onChange: (event) => {
+                                const value = event.target.value;
+                                draftKeys.current.add(row.key);
+                                setDrafts((prev) => ({ ...prev, [row.key]: value }));
+                              },
+                              onKeyDown: (event) => {
+                                if (event.key === "Enter") saveUpstream(row);
+                                if (event.key === "Escape") {
+                                  draftKeys.current.delete(row.key);
+                                  setDrafts((prev) => {
+                                    const next = { ...prev };
+                                    delete next[row.key];
+                                    return next;
+                                  });
+                                }
+                              },
+                            }),
+                            row.stale ? h("span", { className: "ab-tag warn" }, "DSH 已无") : null,
+                            row.missing ? h("span", { className: "ab-tag warn" }, "未记录") : null
+                          ),
+                          h(
+                            "div",
+                            { className: "ab-mrow-a" },
+                            changed
+                              ? h(
+                                  "button",
+                                  {
+                                    className: "ab-btn sm",
+                                    onClick: () => saveUpstream(row),
+                                    disabled: busy !== "",
+                                  },
+                                  busy === `save:${row.key}` ? "保存中…" : "保存"
+                                )
+                              : null,
+                            h(
+                              "button",
+                              {
+                                className: "ab-btn sm danger",
+                                onClick: () => {
+                                  if (confirming) removeModel(row);
+                                  else setConfirmKey(row.key);
+                                },
+                                disabled: busy !== "",
+                                title: "从 DSH 模型设置里删除这个模型",
+                              },
+                              busy === `del:${row.key}`
+                                ? "删除中…"
+                                : confirming
+                                  ? "确认删除"
+                                  : "删除"
+                            )
+                          )
+                        );
+                      })
+                    )
+                  )
+                ),
+            h(
+              "div",
+              { className: "ab-muted", style: { marginTop: "8px" } },
+              "覆盖后每个 provider 的 baseURL 都指向本代理，改写映射表里的上游地址即可让不同模型走不同中转站；删除会同时从 DSH 模型设置里移除该模型。"
             )
           ),
 
@@ -481,7 +823,13 @@ window.__ModuleLoader__.load({
                       "div",
                       { className: "ab-item", key: `${item.at}-${index}` },
                       h("span", { className: "ab-mono" }, fmtTime(item.at)),
-                      h("span", { className: "ab-host" }, item.host || "—"),
+                      h(
+                        "span",
+                        { className: "ab-host" },
+                        item.provider
+                          ? `${item.provider} / ${item.model || "?"} → ${item.host || "—"}`
+                          : item.host || "—"
+                      ),
                       h(
                         "span",
                         { className: "ab-tags" },
@@ -496,7 +844,7 @@ window.__ModuleLoader__.load({
           h(
             "div",
             { className: "ab-muted" },
-            "DSH → 127.0.0.1 代理 → 中转站：代理把顶层 system 拼进第一条 user 消息后置空，再流式转发上游。"
+            "DSH → 127.0.0.1 代理 → 中转站：代理按路由头/模型名选出该模型对应的上游，把顶层 system 拼进第一条 user 消息后置空，再流式转发。"
           )
         )
       );
