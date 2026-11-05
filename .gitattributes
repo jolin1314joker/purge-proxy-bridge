@@ -1,0 +1,8 @@
+# 仓库里的源码与文档统一用 LF 存放，避免 Windows 上 checkout 出 CRLF 后
+# 每次提交都出现整文件 diff。
+* text=auto eol=lf
+
+# 明确的二进制类型（插件目前没有，留作约定）
+*.png binary
+*.jpg binary
+*.zip binary
