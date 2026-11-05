@@ -4,11 +4,20 @@
 #   Windows:        %USERPROFILE%\.dsh\profiles\<profile>\cordis.patch.yml
 #   macOS / Linux:  ~/.dsh/profiles/<profile>/cordis.patch.yml
 # 然后完全重启 DSH。
+#
+# 提示：如果你装了本插件，这一整段其实都由面板的「覆盖」按钮代劳 ——
+# 它会改 baseURL、写 x-relay-route 头、把原始地址记进 routing.json，
+# 之后在面板的「模型 · 上游对照表」里逐模型改上游即可。手写只在
+# 插件没装 / 想预先固化一份配置时才需要。
 
 # 1) 把 provider 的 baseURL 从中转站直连改成代理监听地址。
 #    这里只示意两个：a（Claude）与 v（DeepSeek）。你的 providers 键名可能不同。
 #    如果你的 profile 里**已经有** llm-pi-ai 条目，请直接改那一条里的 baseURL，
 #    不要新增第二条同名条目（容易看混，也难判断哪份生效）。
+#
+#    headers.x-relay-route 是内部路由头：代理靠它知道当前请求属于哪个 provider，
+#    于是两个 provider 下同名的 gpt-6-astra 也不会串台。
+#    不写也能用，代理会退化成按请求体的 model 名匹配。这个头在转发前会被剥掉。
 - id: llm-pi-ai
   name: "@deepseek-ai/dsh-llm-pi-ai"
   config:
@@ -18,6 +27,8 @@
         apiKeyEnv: A_API_KEY
         api: anthropic-messages
         baseURL: http://127.0.0.1:8790        # ← 原来是中转站直连地址
+        headers:
+          x-relay-route: a                    # ← 让代理认得出是哪个 provider
         models:
           - id: claude-sonnet-5-5
             name: claude-sonnet-5-5
@@ -32,6 +43,8 @@
         apiKeyEnv: V_API_KEY
         api: anthropic-messages
         baseURL: http://127.0.0.1:8790        # ← 原来是中转站直连地址
+        headers:
+          x-relay-route: v
         models:
           - id: DeepSeek-V4.1-Flash
             name: DeepSeek-V4.1-Flash
@@ -43,11 +56,13 @@
 
 # 2) 可选：覆盖插件自己的默认配置（bundle 里的 cordis.patch.yml 已给了一份）。
 #    这一层优先级高于 bundle 默认值，低于面板保存的运行时覆盖（config.json）。
+#    upstream 在 2.2.0 里是「默认上游」——路由头、路径前缀、模型名都没命中时才用它；
+#    日常分流靠面板上的对照表（存于 ~/.dsh/api-relay-bridge/routing.json）。
 - id: dsh-api-relay-bridge
   config:
     enabled: true
     port: 8790
-    upstream: https://your-relay.example.com   # ← 填你自己的中转站地址
+    upstream: https://your-relay.example.com   # ← 填你自己的中转站地址（兜底用，可留空）
     mode: move              # move = 折叠后清空 system；copy = 保留一份（对照实验）
     targets: []             # fetch 兜底只改写这些主机（等值或子域）；默认关闭
     audit: true
