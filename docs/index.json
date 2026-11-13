@@ -1,19 +1,19 @@
 {
   "format": 1,
   "title": {
-    "en": "Purge Proxy Bridge Index",
-    "zh": "Purge Proxy Bridge 插件源"
+    "en": "Jolin's DSH Plugin Index",
+    "zh": "Jolin 的 DSH 插件源"
   },
   "description": {
-    "en": "Official index for purge-proxy-bridge.",
-    "zh": "purge-proxy-bridge 插件发布源。"
+    "en": "Plugin index for purge-proxy-bridge and dsh-maestro.",
+    "zh": "包含 purge-proxy-bridge 与 dsh-maestro 的自定义插件发布源。"
   },
   "plugins": [
     {
       "name": "purge-proxy-bridge",
       "title": {
         "en": "Purge Proxy Bridge",
-        "zh": "Purge Proxy Bridge"
+        "zh": "Purge Proxy Bridge（API 中转站桥）"
       },
       "description": {
         "en": "Proxy bridge plugin for DeepSeek Harness.",
@@ -35,6 +35,36 @@
           },
           "engines": {
             "dsh": ">=0.2.1-rc.1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@local/dsh-maestro",
+      "title": {
+        "en": "DSH Maestro",
+        "zh": "DSH Maestro（多智能体编排）"
+      },
+      "description": {
+        "en": "Multi-agent orchestration plugin for DeepSeek Harness.",
+        "zh": "一个队长决策、队员干活的 DeepSeek Harness 多智能体编排插件。"
+      },
+      "author": "jolin1314joker",
+      "homepage": "https://github.com/jolin1314joker/dsh-maestro#readme",
+      "repository": {
+        "url": "https://github.com/jolin1314joker/dsh-maestro"
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1794667200,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/jolin1314joker/dsh-maestro",
+            "commit": "1e6537e45342210713c3753e9a5bb2639968b619"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.1"
           }
         }
       ]
