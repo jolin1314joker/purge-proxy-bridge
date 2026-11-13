@@ -5,6 +5,7 @@
 > 搭配 [dsh-purge](https://github.com/kingcharleslzy-ai/dsh-purge) 使用：purge 负责把系统提示组装并注入进 DSH，本插件负责让这段系统提示穿过会丢弃它的中转。**详见[第 4 节](#4-与-dsh-purge-的关系必读)。**
 
 - 版本：`2.2.0`
+- 包名：`dsh-api-relay-bridge`
 - 宿主：DSH `0.2.x`（在 `0.2.1-rc.5` 上开发并实测）
 - 依赖：无。纯 ESM，只用 Node 内建模块（`node:http` / `node:https` / `node:net` / `node:fs` / `node:os` / `node:path`）
 - 不含任何具体中转站的域名：上游地址由使用者在面板或配置里填
@@ -25,14 +26,23 @@
 9. [故障排查](#9-故障排查)
 10. [安全与隐私](#10-安全与隐私)
 11. [开发与目录结构](#11-开发与目录结构)
-12. [上传前检查](#12-上传前检查)
-13. [许可](#13-许可)
+12. [许可](#12-许可)
 
 ---
 
 ## 0. 快速开始
 
-### 0.1 2.2.0 有什么新的
+### 0.1 一键安装（通过 DSH 自定义插件市场，推荐）
+
+1. 打开 DSH 完成初始化。进入 **「插件」**，点击「实验性插件」旁的 **「更多」**，启用 **「自定义插件市场」**。
+2. 进入 **「发现 → 添加索引源」**，填入本项目的社区索引地址：
+   ```text
+   https://jolin1314joker.github.io/purge-proxy-bridge/index.json
+   ```
+3. 在列表中选择 **API 中转站桥 (purge-proxy-bridge)**，核对来源为 `jolin1314joker/purge-proxy-bridge`、包名为 `dsh-api-relay-bridge`，确认后安装。
+4. 安装完成后完全重启 DSH，在左侧栏点 **「中转站桥」→「覆盖」**，并在对照表里逐模型填入上游地址即可。
+
+### 0.2 2.2.0 有什么新的
 
 | | 2.1.0 | 2.2.0 |
 | --- | --- | --- |
@@ -42,22 +52,6 @@
 | 检测 | 三项 | 四项，新增 **baseURL 覆盖**（不合格会自动改回来） |
 
 细节见 [`CHANGELOG.md`](./CHANGELOG.md) 的 `2.2.0` 段。
-
-### 0.2 最短安装路径
-
-```powershell
-# 1) 克隆到插件目录（目录不存在就先建）
-New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.dsh\plugins" | Out-Null
-cd $env:USERPROFILE\.dsh\plugins
-git clone https://github.com/<you>/purge-proxy-bridge.git dsh-api-relay-bridge
-
-# 2) 让 profile 能解析到它
-New-Item -ItemType Junction `
-  -Path   "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-api-relay-bridge" `
-  -Target "$env:USERPROFILE\.dsh\plugins\dsh-api-relay-bridge"
-```
-
-然后在 `~/.dsh/profiles/desktop/package.json` 的 `dsh.profile.bundles` 里加一行 `"dsh-api-relay-bridge"`，完全重启 DSH，左侧栏点「中转站桥」→ **覆盖** → 在对照表里逐模型填上游。详细步骤见[第 5 节](#5-安装到-dsh)。
 
 ---
 
@@ -85,7 +79,7 @@ DSH 发给模型的请求体里，系统提示是**独立字段**：Anthropic �
 
 一个直观的对照（system 指令是"回答只能是一个词：青竹"，插件前 / 插件后各发一次）：
 
-```
+```text
 插件前  input=34   →  "好的，请问你想了解什么？"          ← 完全没看到 system
 插件后  input=47   →  "青竹"                              ← system 生效
 ```
@@ -94,13 +88,13 @@ DSH 发给模型的请求体里，系统提示是**独立字段**：Anthropic �
 
 ## 2. 它做了什么
 
-```
-DSH 进程                                   本机                     公网
+```text
+DSH 进程                                    本机                     公网
 ┌──────────────────┐   ① 请求     ┌────────────────────┐   ② 转发   ┌────────────┐
 │ llm-pi-ai adapter│ ───────────▶ │ 127.0.0.1:8790     │ ─────────▶ │ API 中转站 │
 │  params.system   │              │ 中转站桥：选上游 + │            │  A / B / C │
 │  messages[...]   │ ◀─────────── │ 折叠 system 后转发 │ ◀───────── │            │
-└──────────────────┘   ④ SSE      └────────────────────┘   ③ SSE     └────────────┘
+└──────────────────┘   ④ SSE      └────────────────────┘   ③ SSE      └────────────┘
 ```
 
 1. DSH 把**所有** provider 的 `baseURL` 指向 `http://127.0.0.1:8790`（本插件的监听地址），而不是直接指向各个中转站 —— 面板上的「覆盖」按钮一步完成。
@@ -120,7 +114,7 @@ DSH 进程                                   本机                     公网
 
 ### 3.1 DSH 的 system 是怎么进到请求体里的
 
-```
+```text
 dsh-system-prompt  组装 sections（含 purge 注入的内容）
         │
         ▼
@@ -139,7 +133,7 @@ pi-ai anthropic-messages
 
 | 方案 | 问题 |
 | --- | --- |
-| 改 purge 插件 | purge 是别人的项目，混入传输层逻辑会让它无法跟着上游更新；且 purge 的一次 apply 会覆盖手工改动 |
+| 改 purge 插件 | purge 是上游项目，混入传输层逻辑会让它无法跟着更新；且 purge 的一次 apply 会覆盖手工改动 |
 | 改 `dsh-llm-pi-ai` | 属于宿主代码，升级即失效；`profileOptions()` 也不传自定义 `fetch` |
 | 监听 `llm/stream` 事件改写 | LOOP 构造的 `options` 与 `options.messages` 都是 **deep-frozen**，只能读不能写 |
 | 包装 `globalThis.fetch` | 可行，但 `dsh-experimental-inspector` 会在之后再包一层（`Object.defineProperty`），导致"到底谁在最外层"无法确定；且只对走 `fetch` 的客户端生效 |
@@ -199,7 +193,7 @@ fetch 兜底仍然保留，但它只作为"漏网请求"的兜底，不再是主
 
 **所以两者是串联的**：
 
-```
+```text
 prompt-inject.md / purge 的 section 排序
         │  组装
         ▼
@@ -216,21 +210,32 @@ DSH system 字段  ──▶  中转站桥（折叠）  ──▶  API 中转站
 
 ### 5.1 前置条件
 
-- DSH 桌面版 `0.2.x`
+- DSH 桌面版 `0.2.x`（建议 `>=0.2.1-rc.5`）
 - Node.js ≥ 20（仅用于跑自检；插件本身跟着 DSH 进程跑）
 - 已安装 [dsh-purge](https://github.com/kingcharleslzy-ai/dsh-purge)（推荐）
 
+### 5.2 方式一：自定义插件市场一键安装（推荐）
+
+1. 打开 DSH 完成初始化，进入 **「插件」**，点击「实验性插件」旁的 **「更多」**，启用 **「自定义插件市场」**。
+2. 进入 **「发现 → 添加索引源」**，添加社区索引：
+   ```text
+   https://jolin1314joker.github.io/purge-proxy-bridge/index.json
+   ```
+3. 找到 **API 中转站桥 (purge-proxy-bridge)**，核对来源为 `jolin1314joker/purge-proxy-bridge`、包名为 `dsh-api-relay-bridge`，确认安装后重启 DSH 即可。
+
+### 5.3 方式二：手动克隆挂载（适合二次开发）
+
 插件通过 DSH 的 **profile bundle** 机制加载：`~/.dsh/profiles/<profile>/package.json` 的 `dsh.profile.bundles` 里列上包名，包自身声明 `dsh.bundle.patch` 指到一个 cordis patch 文件。本仓库的 `package.json` 已经写好了这两处。
 
-### 5.2 步骤（Windows）
+#### Windows（PowerShell）
 
-假设 profile 是默认的 `desktop`。
+假设 profile 是默认的 `desktop`：
 
 ```powershell
 # 1) 把仓库放到插件目录（目录不存在就先建）
 New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.dsh\plugins" | Out-Null
 cd $env:USERPROFILE\.dsh\plugins
-git clone https://github.com/<you>/purge-proxy-bridge.git dsh-api-relay-bridge
+git clone https://github.com/jolin1314joker/purge-proxy-bridge.git dsh-api-relay-bridge
 
 # 2) 让 profile 能解析到这个包（Junction）
 New-Item -ItemType Junction `
@@ -257,18 +262,18 @@ New-Item -ItemType Junction `
 }
 ```
 
-### 5.3 步骤（macOS / Linux）
+#### macOS / Linux
 
 ```bash
 cd ~/.dsh/plugins
-git clone https://github.com/<you>/purge-proxy-bridge.git dsh-api-relay-bridge
+git clone https://github.com/jolin1314joker/purge-proxy-bridge.git dsh-api-relay-bridge
 ln -s ~/.dsh/plugins/dsh-api-relay-bridge \
       ~/.dsh/profiles/desktop/node_modules/dsh-api-relay-bridge
 ```
 
 `package.json` 的改动同上。
 
-> 也可以跳过软链，直接把 `dependencies` 写成 `"dsh-api-relay-bridge": "github:<you>/purge-proxy-bridge"`，由 DSH 的包管理器安装。两种方式加载效果相同；软链的好处是改代码后重启即生效，不用重装。
+> 也可以跳过软链，直接把 `dependencies` 写成 `"dsh-api-relay-bridge": "github:jolin1314joker/purge-proxy-bridge"`，由 DSH 的包管理器安装。两种方式加载效果相同；软链的好处是改代码后重启即生效，不用重装。
 
 ### 5.4 填上游地址
 
@@ -360,7 +365,7 @@ bundle 列表只在启动时读取，**没有文件监听** —— 改完必须�
 
 2.1.0 只有「一个上游 + 三个动作」。换掉文件之后还要重新点一次「覆盖」，因为路由头是 2.2.0 才有的：
 
-1. 更新插件目录（`git pull`，或把新文件拷进去）。用 Junction / symlink 装的此时代码已经生效；**但如果你 profile 下的 `node_modules/<包名>/` 是包管理器复制出来的实体而不是链接，记得再同步一次**，否则跑的仍是旧代码。
+1. 更新插件目录（`git pull`，或通过插件市场更新）。用 Junction / symlink 装的此时代码已经生效；**但如果你 profile 下的 `node_modules/<包名>/` 是包管理器复制出来的实体而不是链接，记得再同步一次**，否则跑的仍是旧代码。
 2. 完全重启 DSH。
 3. 面板点 **覆盖**：这次除了改 `baseURL`，还会给每个 provider 写 `x-relay-route` 头，并生成 `~/.dsh/api-relay-bridge/routing.json`（2.1.0 只有 `config.json`）。
 4. 原来 `config.json` 里的 `upstream` 会被当作**默认上游**继续用，不用改；要逐模型分流就去「模型 · 上游对照表」里改。
@@ -431,10 +436,9 @@ curl -s -X POST http://127.0.0.1:<DSH_WEB_PORT>/relay-bridge/models \
 
 1. 面板 → **还原**（把 baseURL 写回原始地址、清掉路由头）
 2. 面板 → **停止**
-3. 从 `package.json` 的 `dsh.profile.bundles` 与 `dependencies` 里删掉 `dsh-api-relay-bridge`
-4. 删除 `node_modules` 下的 Junction / symlink 与插件目录
-5. 可选：删掉 `~/.dsh/api-relay-bridge/`（配置、路由表与审计）
-6. 重启 DSH
+3. 若通过插件市场安装，直接在 DSH「插件」中卸载；若手动挂载，从 `package.json` 的 `dsh.profile.bundles` 与 `dependencies` 里删掉 `dsh-api-relay-bridge`，并删除 `node_modules` 下的 Junction / symlink 与插件目录
+4. 可选：删掉 `~/.dsh/api-relay-bridge/`（配置、路由表与审计）
+5. 重启 DSH
 
 ---
 
@@ -533,7 +537,7 @@ curl -s -X POST http://127.0.0.1:<DSH_WEB_PORT>/relay-bridge/models \
 
 | 现象 | 原因 / 处理 |
 | --- | --- |
-| 左侧栏没有「中转站桥」 | bundle 没加载。检查 profile `package.json` 的 `dsh.profile.bundles` 是否含包名、`node_modules` 下链接是否有效，然后**完全重启** DSH。启动日志里的 `skippedBundles` 会写明失败原因 |
+| 左侧栏没有「中转站桥」 | bundle 没加载。检查 profile `package.json` 的 `dsh.profile.bundles` 是否含 `dsh-api-relay-bridge`、`node_modules` 下链接是否有效，然后**完全重启** DSH。启动日志里的 `skippedBundles` 会写明失败原因 |
 | 面板显示「代理已停止」，对话报连接错误 | provider 的 `baseURL` 指向 8790 但代理没起来。点「覆盖」（会顺手拉起代理），或点「启用」 |
 | 对话报 `503 upstream not configured` | 这个模型没有对应上游：确认它出现在对照表里、上游地址不为空，或填一个默认上游兜底 |
 | 同名模型走了错的站 | `x-relay-route` 头丢了（手改 baseURL 时漏写）。重新点「覆盖」即可 |
@@ -563,7 +567,7 @@ curl -s -X POST http://127.0.0.1:<DSH_WEB_PORT>/relay-bridge/models \
 
 ## 11. 开发与目录结构
 
-```
+```text
 purge-proxy-bridge/            # 仓库根；包名仍是 dsh-api-relay-bridge
 ├── index.js            # 宿主半边：代理、多上游路由、改写、覆盖/还原、配置（2171 行，无依赖）
 ├── client.js           # 客户端半边：左侧栏面板 + 模型·上游对照表（879 行）
@@ -575,6 +579,7 @@ purge-proxy-bridge/            # 仓库根；包名仍是 dsh-api-relay-bridge
 ├── .gitignore
 ├── .gitattributes      # 统一 LF
 ├── docs/
+│   ├── index.json      # DSH 自定义插件市场索引清单
 │   └── architecture.md # 更细的机制说明：改写边界、多上游解析、失败模式
 └── examples/
     └── cordis.patch.yml # provider baseURL 指向代理 + 路由头的示例片段
@@ -637,69 +642,6 @@ Copy-Item "$env:USERPROFILE\.dsh\plugins\dsh-api-relay-bridge\*" `
 
 ---
 
-## 12. 上传前检查
-
-这份目录已经可以直接上传。只有一处占位符要换：**`<you>`** → 你的 GitHub 用户名。出现在这些地方：
-
-| 位置 | 用在哪 |
-| --- | --- |
-| README 5.2（Windows）、5.3（macOS / Linux） | `git clone` 地址 |
-| README 0.2 最短安装路径 | 同上 |
-| README 12（本节）| 提交命令里的 `origin` |
-| `package.json` 的 `repository` / `homepage` / `bugs` / `author` | 可选，见下方说明 |
-
-一次性替换：
-
-```bash
-# macOS / Linux
-grep -rl '<you>' . --exclude-dir=.git | xargs sed -i 's|<you>|你的用户名|g'
-```
-
-```powershell
-# Windows
-Get-ChildItem -Recurse -File -Exclude *.png,*.jpg |
-  Where-Object { $_.FullName -notmatch '\\\.git\\' } |
-  ForEach-Object {
-    (Get-Content $_.FullName -Raw) -replace '<you>', '你的用户名' |
-      Set-Content $_.FullName -NoNewline
-  }
-```
-
-> `package.json` 目前**不含** `repository` / `homepage` / `bugs` / `author` —— 带着 `<you>` 的非法 URL 会让包元信息解析报错，而占位符只能由你自己填。仓库建好之后再把这几项补上就行：
->
-> ```json
-> "repository": { "type": "git", "url": "https://github.com/<you>/purge-proxy-bridge.git" },
-> "homepage": "https://github.com/<you>/purge-proxy-bridge#readme",
-> "bugs": { "url": "https://github.com/<you>/purge-proxy-bridge/issues" },
-> "author": "<you>"
-> ```
-
-然后：
-
-```bash
-git init
-git add .
-git commit -m "feat: API 中转站桥 v2.2.0 —— 一键覆盖 baseURL，多中转站按模型自动分流"
-git branch -M main
-git tag v2.2.0
-git remote add origin https://github.com/<you>/purge-proxy-bridge.git
-git push -u origin main --tags
-```
-
-Release 说明直接从 [`CHANGELOG.md`](./CHANGELOG.md) 的 `2.2.0` 段复制即可。
-
-**上传前自查清单**：
-
-- [ ] 没有具体中转站域名 / 品牌名 —— `grep -rniE 'apiox[a]|aihu[b]' .` 应当无输出（`relay-*.example.com` 这类示例地址是故意的；方括号是为了让这行检查自己不匹配）
-- [ ] 没有 key / token —— `grep -rniE 'sk-|bearer [a-z0-9]{20,}|api[_-]?key *[:=] *["'"'"'][^"'"'"']{16,}'` 应当无输出
-- [ ] `node --check index.js && node --check client.js` 通过
-- [ ] `node -e "import('./index.js').then(m=>console.log(m.version))"` 打印 `2.2.0`
-- [ ] `package.json` 与 `index.js` 的 `VERSION` 都是 `2.2.0`
-- [ ] 仓库里没有 `node_modules/`、`api-relay-bridge/`、`*.jsonl`（`.gitignore` 已挡）
-- [ ] 文件是 LF（`.gitattributes` 已挡 CRLF 噪音）
-
-> 想让别人能在 DSH 插件市场里一键装：往你的市场 `index.json` 加一条指向本仓库的条目即可；不发布也不影响手动安装。
-
-## 13. 许可
+## 12. 许可
 
 MIT，见 [LICENSE](./LICENSE)。
