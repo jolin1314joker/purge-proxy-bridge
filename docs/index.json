@@ -3,9 +3,8 @@
   "name": "Purge Proxy Bridge",
   "plugins": [
     {
-      "id": "purge-proxy-bridge",
-      "name": "Purge Proxy Bridge",
-      "package": "purge-proxy-bridge",
+      "name": "purge-proxy-bridge",
+      "displayName": "Purge Proxy Bridge",
       "version": "1.0.0",
       "description": "Proxy bridge plugin for DeepSeek Harness",
       "repository": "jolin1314joker/purge-proxy-bridge"
