@@ -1,13 +1,43 @@
 {
   "format": 1,
-  "name": "Purge Proxy Bridge",
+  "title": {
+    "en": "Purge Proxy Bridge Index",
+    "zh": "Purge Proxy Bridge 插件源"
+  },
+  "description": {
+    "en": "Official index for purge-proxy-bridge.",
+    "zh": "purge-proxy-bridge 插件发布源。"
+  },
   "plugins": [
     {
       "name": "purge-proxy-bridge",
-      "displayName": "Purge Proxy Bridge",
-      "version": "1.0.0",
-      "description": "Proxy bridge plugin for DeepSeek Harness",
-      "repository": "jolin1314joker/purge-proxy-bridge"
+      "title": {
+        "en": "Purge Proxy Bridge",
+        "zh": "Purge Proxy Bridge"
+      },
+      "description": {
+        "en": "Proxy bridge plugin for DeepSeek Harness.",
+        "zh": "适用于 DeepSeek Harness 的代理桥接插件。"
+      },
+      "author": "jolin1314joker",
+      "homepage": "https://github.com/jolin1314joker/purge-proxy-bridge#readme",
+      "repository": {
+        "url": "https://github.com/jolin1314joker/purge-proxy-bridge"
+      },
+      "versions": [
+        {
+          "version": "1.0.0",
+          "publishTimestamp": 1794580800,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/jolin1314joker/purge-proxy-bridge",
+            "commit": "<替换为你仓库最新代码提交的40位完整SHA哈希>"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.1"
+          }
+        }
+      ]
     }
   ]
 }
