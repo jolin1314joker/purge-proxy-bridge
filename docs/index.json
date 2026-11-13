@@ -31,7 +31,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/jolin1314joker/purge-proxy-bridge",
-            "commit": "<替换为你仓库最新代码提交的40位完整SHA哈希>"
+            "commit": "5da972e97766e817b3e771fea962b5551d8aa058"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.1"
