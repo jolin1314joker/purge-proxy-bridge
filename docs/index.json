@@ -68,6 +68,216 @@
           }
         }
       ]
+    },
+    {
+      "name": "dsh-better-sidebar",
+      "title": {
+        "en": "Dsh Better Sidebar",
+        "zh": "Dsh Better Sidebar"
+      },
+      "description": {
+        "en": "Better Sidebar for DSH — file tree, editor, changes, tasks and side chat in one column, separate for every conversation. Configure it in Settings → Side card (bottom-left). Also exposes a service other plugins use to register sidebar tabs and file viewers.",
+        "zh": "Better Sidebar for DSH — file tree, editor, changes, tasks and side chat in one column, separate for every conversation. Configure it in Settings → Side card (bottom-left). Also exposes a service other plugins use to register sidebar tabs and file viewers."
+      },
+      "author": "omdsh-dev",
+      "homepage": "https://github.com/omdsh-dev/DSH-better-sidebar#readme",
+      "repository": {
+        "url": "https://github.com/omdsh-dev/DSH-better-sidebar"
+      },
+      "versions": [
+        {
+          "version": "0.32.1",
+          "publishTimestamp": 1794558350,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/omdsh-dev/DSH-better-sidebar",
+            "commit": "2811573c9c0bad51d77db6c3c94d78f5aed8d38a"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "dsh-codex-effort-slider",
+      "title": {
+        "en": "Dsh Codex Effort Slider",
+        "zh": "Dsh Codex Effort Slider"
+      },
+      "description": {
+        "en": "Codex 风格的推理等级滑条：把 DSH 输入框工具行的推理等级档位换成一条可拖动的连续滑条 / A Codex-style reasoning-effort slider for DeepSeek Harness",
+        "zh": "Codex 风格的推理等级滑条：把 DSH 输入框工具行的推理等级档位换成一条可拖动的连续滑条 / A Codex-style reasoning-effort slider for DeepSeek Harness"
+      },
+      "author": "Microqian2th",
+      "homepage": "https://github.com/Microqian2th/dsh-codex-effort-slider#readme",
+      "repository": {
+        "url": "https://github.com/Microqian2th/dsh-codex-effort-slider"
+      },
+      "versions": [
+        {
+          "version": "1.1.6",
+          "publishTimestamp": 1794671142,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/Microqian2th/dsh-codex-effort-slider",
+            "commit": "c234e06d917036a4bbdf90d199c1708a8a3b225d"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "dsh-gitbash-shell",
+      "title": {
+        "en": "Dsh Gitbash Shell",
+        "zh": "Dsh Gitbash Shell"
+      },
+      "description": {
+        "en": "Windows 上给 agent 一个真正的 Git Bash 命令工具:私有 Git Bash 执行器实例(官方 PowerShell 执行器原样保留),统一 MSYS 盘根路径方言,官方 pwsh 工具默认隐藏可开关,物化四个内置预设的 Git Bash 变体,侧栏终端接管可开关。· Give agents a real Git Bash tool on Windows: a private Git Bash executor instance (the official PowerShell executor stays untouched), a unified MSYS drive-root path dialect, an opt-in official pwsh tool, and four Git Bash preset variants.",
+        "zh": "Windows 上给 agent 一个真正的 Git Bash 命令工具:私有 Git Bash 执行器实例(官方 PowerShell 执行器原样保留),统一 MSYS 盘根路径方言,官方 pwsh 工具默认隐藏可开关,物化四个内置预设的 Git Bash 变体,侧栏终端接管可开关。· Give agents a real Git Bash tool on Windows: a private Git Bash executor instance (the official PowerShell executor stays untouched), a unified MSYS drive-root path dialect, an opt-in official pwsh tool, and four Git Bash preset variants."
+      },
+      "author": "KannaKuron",
+      "homepage": "https://github.com/KannaKuron/dsh-gitbash-shell#readme",
+      "repository": {
+        "url": "https://github.com/KannaKuron/dsh-gitbash-shell"
+      },
+      "versions": [
+        {
+          "version": "0.55.0",
+          "publishTimestamp": 1794474696,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/KannaKuron/dsh-gitbash-shell",
+            "commit": "dce7ca5526ed35849133caa2f4b2a104f00dd90b"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "dsh-plugin-rea",
+      "title": {
+        "en": "Dsh Plugin Rea",
+        "zh": "Dsh Plugin Rea"
+      },
+      "description": {
+        "en": "One-plugin bundle: provisions Node/REA/JDK/Ghidra for you, then registers the upstream REA MCP server as mcp__rea__* tools. · 一体包：自动准备 Node/REA/JDK/Ghidra，并把上游 REA 的 MCP 服务接入 DeepSeek Harness。",
+        "zh": "One-plugin bundle: provisions Node/REA/JDK/Ghidra for you, then registers the upstream REA MCP server as mcp__rea__* tools. · 一体包：自动准备 Node/REA/JDK/Ghidra，并把上游 REA 的 MCP 服务接入 DeepSeek Harness。"
+      },
+      "author": "czcdr",
+      "homepage": "https://github.com/czcdr/dsh-plugin-rea#readme",
+      "repository": {
+        "url": "https://github.com/czcdr/dsh-plugin-rea"
+      },
+      "versions": [
+        {
+          "version": "2.0.18",
+          "publishTimestamp": 1794573528,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/czcdr/dsh-plugin-rea",
+            "commit": "82a13e5cdb29685cd518a964f7552685a5c9e331"
+          },
+          "engines": {
+            "dsh": ">=0.1.7-rc.2 <0.3.0-0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "dsh-purge-community",
+      "title": {
+        "en": "Dsh Purge",
+        "zh": "Dsh Purge"
+      },
+      "description": {
+        "en": "让 AI 更专注地辅助学习与动手实验：DSH 附加组件，提供状态自检、提示词与规则管理、本机备份与回滚。",
+        "zh": "让 AI 更专注地辅助学习与动手实验：DSH 附加组件，提供状态自检、提示词与规则管理、本机备份与回滚。"
+      },
+      "author": "kingcharleslzy-ai",
+      "homepage": "https://github.com/kingcharleslzy-ai/dsh-purge#readme",
+      "repository": {
+        "url": "https://github.com/kingcharleslzy-ai/dsh-purge"
+      },
+      "versions": [
+        {
+          "version": "1.7.14",
+          "publishTimestamp": 1794647375,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/kingcharleslzy-ai/dsh-purge",
+            "commit": "44379d4e4b2d1d7a65b3518c412cca46b1b818c3"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "dsh-free-search",
+      "title": {
+        "en": "Dsh Free Search",
+        "zh": "Dsh Free Search"
+      },
+      "description": {
+        "en": "Free web search for DeepSeek Harness: 39 engines (Bing/DuckDuckGo/AnySearch/SearXNG/Exa/Tavily/Keenable/Firecrawl/Parallel/You.com keyless; Zhihu global/site via MCP and Perplexity/SerpBase/DeepSeek (official + native tools/search)/Baidu/Kimi/Aliyun/Doubao/Google CSE/Metaso/Yandex/Yuanbao with key; OpenAI/Gemini/Claude model built-in search, explicit-only) + auto smart routing + global engine enable/disable & fallback priority + editable zh/en language pools + multi mode (parallel full language-pool merge) + multi_search cross-source tool + failure-aware fallback (quota/auth cooldown, transient retry, fallbackOn) + time filtering + platform search + domain blocklist (blockedDomains) + web_fetch, with web settings UI, plus a standalone stdio MCP server.",
+        "zh": "Free web search for DeepSeek Harness: 39 engines (Bing/DuckDuckGo/AnySearch/SearXNG/Exa/Tavily/Keenable/Firecrawl/Parallel/You.com keyless; Zhihu global/site via MCP and Perplexity/SerpBase/DeepSeek (official + native tools/search)/Baidu/Kimi/Aliyun/Doubao/Google CSE/Metaso/Yandex/Yuanbao with key; OpenAI/Gemini/Claude model built-in search, explicit-only) + auto smart routing + global engine enable/disable & fallback priority + editable zh/en language pools + multi mode (parallel full language-pool merge) + multi_search cross-source tool + failure-aware fallback (quota/auth cooldown, transient retry, fallbackOn) + time filtering + platform search + domain blocklist (blockedDomains) + web_fetch, with web settings UI, plus a standalone stdio MCP server."
+      },
+      "author": "DDDMUC",
+      "homepage": "https://github.com/DDDMUC/dsh-free-search#readme",
+      "repository": {
+        "url": "https://github.com/DDDMUC/dsh-free-search"
+      },
+      "versions": [
+        {
+          "version": "0.9.50",
+          "publishTimestamp": 1794665210,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/DDDMUC/dsh-free-search",
+            "commit": "6ab5168f45c05c428c3afabe7edbd5b279052f28"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "dsh-context",
+      "title": {
+        "en": "Dsh Context",
+        "zh": "Dsh Context"
+      },
+      "description": {
+        "en": "A DeepSeek Harness plugin for context insight and management, with context dashboard and context command, for understanding how the context is made of, and how it evolves.",
+        "zh": "A DeepSeek Harness plugin for context insight and management, with context dashboard and context command, for understanding how the context is made of, and how it evolves."
+      },
+      "author": "bowenliang123",
+      "homepage": "https://github.com/bowenliang123/dsh-context#readme",
+      "repository": {
+        "url": "https://github.com/bowenliang123/dsh-context"
+      },
+      "versions": [
+        {
+          "version": "0.84.1",
+          "publishTimestamp": 1794664895,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/bowenliang123/dsh-context",
+            "commit": "eadff0dd29cd2312e33501ffc9f6075e0b529eae"
+          },
+          "engines": {
+            "dsh": ">=0.2.0-rc.2 || >=0.2.1-rc.2 || >=0.2.2-rc.1"
+          }
+        }
+      ]
     }
   ]
 }
