@@ -40,7 +40,7 @@
       ]
     },
     {
-      "name": "@local/dsh-maestro",
+      "name": "dsh-maestro",
       "title": {
         "en": "DSH Maestro",
         "zh": "DSH Maestro（多智能体编排）"
@@ -61,7 +61,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/jolin1314joker/dsh-maestro",
-            "commit": "1e6537e45342210713c3753e9a5bb2639968b619"
+            "commit": "5ac10c160a2c57b7bce7fd765dc91e5ac3abd7e1"
           },
           "engines": {
             "dsh": ">=0.2.2-rc.1"
