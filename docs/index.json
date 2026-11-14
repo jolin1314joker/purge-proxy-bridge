@@ -31,7 +31,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/jolin1314joker/purge-proxy-bridge",
-            "commit": "5da972e97766e817b3e771fea962b5551d8aa058"
+            "commit": "63f579c56ccc69a35fad440296f888d2685b4c9d"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.1"
