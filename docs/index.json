@@ -278,6 +278,36 @@
           }
         }
       ]
+    },
+    {
+      "name": "dsh-connect-plus",
+      "title": {
+        "en": "Dsh Connect Plus",
+        "zh": "Dsh Connect Plus"
+      },
+      "description": {
+        "en": "一个插件接入 WorkBuddy（含企业版，多账号注册表）/ Trae / Qoder CN 全部渠道模型。内置全量社区补丁：DSML 泄漏修复、tailfix 正文保留、Qoder 502 网络错误分类、userinfo Bearer 签名修复、SSE 心跳保活、pi-ai 崩溃加固。开箱即用，Windows / Linux / macOS 通用。",
+        "zh": "一个插件接入 WorkBuddy（含企业版，多账号注册表）/ Trae / Qoder CN 全部渠道模型。内置全量社区补丁：DSML 泄漏修复、tailfix 正文保留、Qoder 502 网络错误分类、userinfo Bearer 签名修复、SSE 心跳保活、pi-ai 崩溃加固。开箱即用，Windows / Linux / macOS 通用。"
+      },
+      "author": "parkes-mimir",
+      "homepage": "https://github.com/parkes-mimir/dsh-connect-plus#readme",
+      "repository": {
+        "url": "https://github.com/parkes-mimir/dsh-connect-plus"
+      },
+      "versions": [
+        {
+          "version": "0.3.3-plus.5",
+          "publishTimestamp": 1793853997,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/parkes-mimir/dsh-connect-plus",
+            "commit": "3889396051cc47ba053946c2dbc85f1fc609c995"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.1"
+          }
+        }
+      ]
     }
   ]
 }
